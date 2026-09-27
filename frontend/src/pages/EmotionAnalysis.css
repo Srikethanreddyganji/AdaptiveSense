@@ -1,0 +1,476 @@
+* {
+    box-sizing: border-box;
+}
+
+.insights-page {
+    min-height: 100vh;
+    background: #f6f8fb;
+    color: #172033;
+    padding: 32px 24px 60px;
+}
+
+.insights-main {
+    width: 100%;
+    max-width: 1080px;
+    margin: 0 auto;
+}
+
+/* Back */
+
+.back-button {
+    border: none;
+    background: transparent;
+    color: #2563eb !important;
+    font-size: 14px;
+    cursor: pointer;
+    padding: 0;
+    margin-bottom: 20px;
+}
+
+.back-button:hover {
+    color: #2563eb;
+}
+
+/* Heading */
+
+.insights-heading {
+    text-align: center;
+    margin-bottom: 34px;
+}
+
+.insights-heading h1 {
+    margin: 0;
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: #172033;
+}
+
+.insights-heading p {
+    margin: 10px 0 0;
+    color: #6680a4;
+    font-size: 15px;
+}
+
+/* Latest Card */
+
+.latest-card {
+    background: #ffffff;
+    border: 1px solid #e0e6ef;
+    border-radius: 18px;
+    padding: 30px;
+    margin-bottom: 18px;
+    box-shadow: 0 5px 20px rgba(30, 50, 80, 0.04);
+}
+
+.latest-card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 20px;
+}
+
+.section-label {
+    display: block;
+    color: #8295b2;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    margin-bottom: 14px;
+}
+
+.latest-card h2 {
+    margin: 0;
+    font-size: 30px;
+    color: #172033;
+}
+
+.analysis-description {
+    margin: 16px 0 0;
+    color: #577194;
+    font-size: 15px;
+    line-height: 1.7;
+}
+
+/* Emotion Badge */
+
+.emotion-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 11px 18px;
+    border-radius: 30px;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.emotion-badge.stress {
+    background: #fff4e8;
+    color: #c46a00;
+}
+
+.emotion-badge.anxiety {
+    background: #fff9df;
+    color: #9a7900;
+}
+
+.emotion-badge.sadness {
+    background: #edf3ff;
+    color: #4771bb;
+}
+
+.emotion-badge.anger {
+    background: #fff0f0;
+    color: #c54848;
+}
+
+.emotion-badge.fear {
+    background: #f2efff;
+    color: #6d59b6;
+}
+
+.emotion-badge.confusion {
+    background: #f3efff;
+    color: #725cb5;
+}
+
+.emotion-badge.positive {
+    background: #eaf9f1;
+    color: #268253;
+}
+
+.emotion-badge.neutral {
+    background: #eef2f6;
+    color: #5d6c80;
+}
+
+/* Metrics */
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns:
+        repeat(4, minmax(0, 1fr));
+    gap: 14px;
+    margin-bottom: 18px;
+}
+
+.metric-card {
+    background: #ffffff;
+    border: 1px solid #e0e6ef;
+    border-radius: 16px;
+    padding: 25px 18px;
+    text-align: center;
+    min-height: 125px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 16px rgba(30, 50, 80, 0.025);
+}
+
+.metric-label {
+    font-size: 13px;
+    color: #8495ae;
+    margin-bottom: 18px;
+}
+
+.metric-value {
+    font-size: 20px;
+    color: #172033;
+}
+
+.emotion-text.stress {
+    color: #c46a00;
+}
+
+.emotion-text.anxiety {
+    color: #9a7900;
+}
+
+.emotion-text.sadness {
+    color: #4771bb;
+}
+
+.emotion-text.anger {
+    color: #c54848;
+}
+
+.emotion-text.fear {
+    color: #6d59b6;
+}
+
+.emotion-text.confusion {
+    color: #725cb5;
+}
+
+.emotion-text.positive {
+    color: #268253;
+}
+
+.emotion-text.neutral {
+    color: #5d6c80;
+}
+
+/* Distress */
+
+.distress-low {
+    color: #248354;
+}
+
+.distress-moderate {
+    color: #c46600;
+}
+
+.distress-high {
+    color: #c53d3d;
+}
+
+/* Risk */
+
+.risk-low {
+    color: #208052;
+}
+
+.risk-moderate {
+    color: #c47700;
+}
+
+.risk-elevated {
+    color: #c53d3d;
+}
+
+/* Confidence */
+
+.confidence-card {
+    background: #ffffff;
+    border: 1px solid #e0e6ef;
+    border-radius: 16px;
+    padding: 26px 30px;
+    margin-bottom: 18px;
+}
+
+.confidence-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    font-size: 14px;
+    color: #6e829f;
+}
+
+.confidence-header strong {
+    color: #172033;
+}
+
+.confidence-track {
+    height: 7px;
+    width: 100%;
+    background: #e9edf2;
+    border-radius: 20px;
+    overflow: hidden;
+}
+
+.confidence-fill {
+    height: 100%;
+    background: #33445e;
+    border-radius: 20px;
+    transition: width 0.5s ease;
+}
+
+/* Information */
+
+.information-card {
+    background: #ffffff;
+    border: 1px solid #e0e6ef;
+    border-radius: 16px;
+    padding: 28px 30px;
+    margin-bottom: 22px;
+}
+
+.information-card h3 {
+    margin: 0 0 14px;
+    font-size: 18px;
+    color: #172033;
+}
+
+.information-card p {
+    margin: 0 0 12px;
+    color: #627894;
+    line-height: 1.7;
+    font-size: 14px;
+}
+
+.insight-note {
+    margin-top: 20px;
+    padding: 15px 17px;
+    border-radius: 10px;
+    background: #f5f7fa;
+    display: flex;
+    gap: 12px;
+    align-items: flex-start;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.insight-note strong {
+    color: #33445e;
+    white-space: nowrap;
+}
+
+.insight-note span {
+    color: #687b96;
+}
+
+/* Buttons */
+
+.insights-actions {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+}
+
+.primary-button,
+.secondary-button {
+    border-radius: 10px;
+    padding: 12px 20px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+.primary-button {
+    border: none;
+    background: #2563eb;
+    color: #ffffff;
+}
+
+.primary-button:hover {
+    background: #1d4ed8;
+}
+
+.secondary-button {
+    border: 1px solid #d5ddea;
+    background: #ffffff;
+    color: #405675;
+}
+
+.secondary-button:hover {
+    background: #f5f7fa;
+}
+
+/* Loading */
+
+.insights-loading {
+    min-height: 420px;
+    background: #ffffff;
+    border: 1px solid #e0e6ef;
+    border-radius: 18px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: #7185a2;
+}
+
+.loading-spinner {
+    width: 32px;
+    height: 32px;
+    border: 3px solid #e3e9f1;
+    border-top-color: #2563eb;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-bottom: 15px;
+}
+
+@keyframes spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Empty */
+
+.empty-insights {
+    background: #ffffff;
+    border: 1px solid #e0e6ef;
+    border-radius: 18px;
+    padding: 70px 30px;
+    text-align: center;
+    box-shadow: 0 5px 20px rgba(30, 50, 80, 0.04);
+}
+
+.empty-icon {
+    width: 58px;
+    height: 58px;
+    border-radius: 16px;
+    background: #eaf1ff;
+    color: #2563eb;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 18px;
+    font-weight: 700;
+    font-size: 17px;
+}
+
+.empty-insights h2 {
+    margin: 0 0 10px;
+    color: #172033;
+}
+
+.empty-insights p {
+    max-width: 450px;
+    margin: 0 auto 25px;
+    color: #7185a2;
+    line-height: 1.6;
+}
+
+/* Responsive */
+
+@media (max-width: 800px) {
+
+    .metrics-grid {
+        grid-template-columns:
+            repeat(2, minmax(0, 1fr));
+    }
+
+    .latest-card-top {
+        flex-direction: column;
+    }
+
+    .emotion-badge {
+        align-self: flex-start;
+    }
+}
+
+@media (max-width: 550px) {
+
+    .insights-page {
+        padding: 22px 15px 40px;
+    }
+
+    .insights-heading h1 {
+        font-size: 28px;
+    }
+
+    .latest-card,
+    .confidence-card,
+    .information-card {
+        padding: 22px;
+    }
+
+    .metrics-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .insights-actions {
+        flex-direction: column;
+    }
+
+    .primary-button,
+    .secondary-button {
+        width: 100%;
+    }
+}
