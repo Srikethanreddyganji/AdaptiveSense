@@ -1,0 +1,65 @@
+services:
+  # -------------------------------------------------------------
+  # 1. AI Service (FastAPI + Lightweight Quantized DistilRoBERTa)
+  # -------------------------------------------------------------
+  - type: web
+    name: adaptivesense-ai-service
+    runtime: docker
+    rootDir: ai-service
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      - key: AI_SERVICE_INTERNAL_KEY
+        generateValue: true
+
+  # -------------------------------------------------------------
+  # 2. Backend Service (Spring Boot 4 / Java 21)
+  # -------------------------------------------------------------
+  - type: web
+    name: adaptivesense-backend
+    runtime: docker
+    rootDir: backend
+    plan: free
+    healthCheckPath: /api/auth/health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_USERNAME
+        sync: false
+      - key: DATABASE_PASSWORD
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-1.5-flash
+      - key: AI_SERVICE_URL
+        fromService:
+          type: web
+          name: adaptivesense-ai-service
+          property: host
+      - key: AI_SERVICE_INTERNAL_KEY
+        fromService:
+          type: web
+          name: adaptivesense-ai-service
+          envVarKey: AI_SERVICE_INTERNAL_KEY
+      - key: CORS_ALLOWED_ORIGINS
+        value: "*"
+
+  # -------------------------------------------------------------
+  # 3. Frontend Static Site (React 19 / Vite)
+  # -------------------------------------------------------------
+  - type: web
+    name: adaptivesense-frontend
+    runtime: static
+    rootDir: frontend
+    plan: free
+    buildCommand: npm install && npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: VITE_API_URL
+        fromService:
+          type: web
+          name: adaptivesense-backend
+          property: host
