@@ -11,6 +11,10 @@ services:
     envVars:
       - key: AI_SERVICE_INTERNAL_KEY
         generateValue: true
+      - key: MALLOC_ARENA_MAX
+        value: "2"
+      - key: TORCH_NUM_THREADS
+        value: "1"
 
   # -------------------------------------------------------------
   # 2. Backend Service (Spring Boot 4 / Java 21)
@@ -22,6 +26,8 @@ services:
     plan: free
     healthCheckPath: /api/auth/health
     envVars:
+      - key: MALLOC_ARENA_MAX
+        value: "2"
       - key: DATABASE_URL
         sync: false
       - key: DATABASE_USERNAME

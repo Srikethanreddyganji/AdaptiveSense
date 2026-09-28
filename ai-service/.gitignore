@@ -26,3 +26,5 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+model_quantized/
+*.pt

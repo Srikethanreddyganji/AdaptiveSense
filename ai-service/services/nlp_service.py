@@ -1,39 +1,65 @@
 import os
 import torch
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+
+EMOTION_LABELS = ["anger", "disgust", "fear", "joy", "neutral", "sadness", "surprise"]
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+QUANTIZED_DIR = os.path.join(BASE_DIR, "model_quantized")
+QUANTIZED_MODEL_PATH = os.path.join(QUANTIZED_DIR, "model_quantized.pt")
 
 
 class NLPService:
 
     def __init__(self):
-        print("Configuring lightweight single-thread CPU execution...")
+        print("Configuring single-thread execution for minimal memory footprint...")
         torch.set_num_threads(1)
 
-        print("Loading DistilRoBERTa emotion model...")
-        try:
-            self.emotion_model = pipeline(
-                "text-classification",
-                model="j-hartmann/emotion-english-distilroberta-base",
-                top_k=None,
-                device="cpu"
-            )
+        self.tokenizer = None
+        self.model = None
+        self.model_loaded = False
 
-            # Apply dynamic int8 quantization to compress linear layers (~85MB in RAM)
+        # 1. Attempt to load ahead-of-time pre-quantized TorchScript model (~190MB)
+        if os.path.exists(QUANTIZED_MODEL_PATH) and os.path.exists(QUANTIZED_DIR):
             try:
-                self.emotion_model.model = torch.quantization.quantize_dynamic(
-                    self.emotion_model.model,
+                print(f"Loading pre-quantized model from {QUANTIZED_MODEL_PATH}...")
+                self.tokenizer = AutoTokenizer.from_pretrained(QUANTIZED_DIR, local_files_only=True)
+                self.model = torch.jit.load(QUANTIZED_MODEL_PATH, map_location="cpu")
+                self.model.eval()
+                self.model_loaded = True
+                print("Pre-quantized INT8 NLP model loaded successfully into low-memory footprint.")
+                return
+            except Exception as e:
+                print(f"Warning: Failed to load pre-quantized model ({e}). Attempting dynamic fallback.")
+
+        # 2. Fallback to on-demand lightweight load + quantization
+        try:
+            model_name = "j-hartmann/emotion-english-distilroberta-base"
+            print(f"Loading {model_name} on-demand with low CPU memory usage...")
+            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+            base_model = AutoModelForSequenceClassification.from_pretrained(
+                model_name,
+                low_cpu_mem_usage=True
+            )
+            base_model.eval()
+
+            try:
+                self.model = torch.quantization.quantize_dynamic(
+                    base_model,
                     {torch.nn.Linear},
                     dtype=torch.qint8
                 )
-                print("Dynamic int8 quantization applied successfully.")
+                self.model.eval()
+                print("Dynamic INT8 quantization applied successfully.")
             except Exception as q_err:
                 print(f"Quantization skipped: {q_err}")
+                self.model = base_model
 
-            print("NLP model loaded successfully into low-memory footprint.")
             self.model_loaded = True
+            print("NLP model loaded successfully.")
         except Exception as e:
-            print(f"Warning: Failed to load DistilRoBERTa model ({e}). Using lightweight rule-based NLP fallback.")
-            self.emotion_model = None
+            print(f"Warning: Failed to load transformer model ({e}). Using defensive lexicon NLP fallback.")
+            self.model = None
+            self.tokenizer = None
             self.model_loaded = False
 
     def analyze(self, text: str):
@@ -41,18 +67,32 @@ class NLPService:
         if not clean_text:
             clean_text = "neutral"
 
-        if not self.model_loaded or self.emotion_model is None:
+        if not self.model_loaded or self.model is None or self.tokenizer is None:
             return self._fallback_analyze(clean_text)
 
         try:
             # -----------------------------------------
-            # EMOTION ANALYSIS (DistilRoBERTa)
+            # EMOTION ANALYSIS (Quantized Model)
             # -----------------------------------------
-            emotion_results = self.emotion_model(
+            inputs = self.tokenizer(
                 clean_text,
                 truncation=True,
-                max_length=512
-            )[0]
+                max_length=512,
+                return_tensors="pt"
+            )
+
+            with torch.no_grad():
+                out = self.model(inputs["input_ids"], inputs["attention_mask"])
+                logits = out["logits"] if isinstance(out, dict) else (out.logits if hasattr(out, "logits") else out[0])
+                probs = torch.softmax(logits, dim=-1)[0].tolist()
+
+            emotion_results = [
+                {
+                    "label": EMOTION_LABELS[i],
+                    "score": round(float(probs[i]), 4)
+                }
+                for i in range(len(EMOTION_LABELS))
+            ]
 
             emotions = sorted(
                 emotion_results,
@@ -65,10 +105,7 @@ class NLPService:
             formatted_emotions = [
                 {
                     "label": emotion["label"],
-                    "score": round(
-                        float(emotion["score"]),
-                        4
-                    )
+                    "score": round(float(emotion["score"]), 4)
                 }
                 for emotion in top_emotions
             ]
