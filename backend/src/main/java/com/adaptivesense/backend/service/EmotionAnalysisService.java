@@ -5,9 +5,10 @@ import com.adaptivesense.backend.entity.EmotionAnalysis;
 import com.adaptivesense.backend.repository.ConversationRepository;
 import com.adaptivesense.backend.repository.EmotionAnalysisRepository;
 
-import org.springframework.beans.factory.annotation.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,19 +17,17 @@ import java.util.Map;
 @Service
 public class EmotionAnalysisService {
 
-    @Value("${gemini.api.key}")
-    private String apiKey;
+    private static final Logger log =
+            LoggerFactory.getLogger(
+                    EmotionAnalysisService.class
+            );
 
-    private final RestClient restClient;
     private final EmotionAnalysisRepository emotionAnalysisRepository;
     private final ConversationRepository conversationRepository;
 
     public EmotionAnalysisService(
-            RestClient.Builder builder,
             EmotionAnalysisRepository emotionAnalysisRepository,
             ConversationRepository conversationRepository) {
-
-        this.restClient = builder.build();
 
         this.emotionAnalysisRepository =
                 emotionAnalysisRepository;
@@ -37,298 +36,182 @@ public class EmotionAnalysisService {
                 conversationRepository;
     }
 
-    public EmotionAnalysis analyzeEmotion(
+    /*
+     * ============================================================
+     * SAVE PYTHON AI ANALYSIS
+     * ============================================================
+     *
+     * Python AI service has already performed:
+     *
+     * User message
+     *      ↓
+     * RoBERTa sentiment
+     *      ↓
+     * Emotion model
+     *      ↓
+     * Adaptive Social Cue Engine
+     *
+     * This method DOES NOT call Python again.
+     * This method DOES NOT call Gemini.
+     *
+     * It simply converts the Python result into our
+     * EmotionAnalysis database entity and saves it.
+     */
+    public EmotionAnalysis saveAnalysis(
             Long conversationId,
-            String userMessage) {
-
-        String url =
-                "https://generativelanguage.googleapis.com/v1beta/models/"
-                + "gemini-3.5-flash-lite:generateContent";
-
-        String prompt = """
-                Analyze the emotional signals in the following user message.
-
-                This is NOT a medical diagnosis.
-
-                Identify:
-                1. Primary emotion
-                2. Distress level
-                3. Risk level
-                4. Confidence
-
-                Allowed emotion values:
-                Positive, Neutral, Stress, Anxiety-like,
-                Sadness, Anger, Fear, Confusion
-
-                Allowed distress levels:
-                Low, Moderate, High
-
-                Allowed risk levels:
-                Low, Moderate, Elevated
-
-                Confidence must be a number between 0.0 and 1.0.
-
-                Return ONLY valid JSON.
-
-                Use exactly this structure:
-
-                {
-                  "emotion": "Stress",
-                  "distressLevel": "Moderate",
-                  "riskLevel": "Low",
-                  "confidence": 0.85
-                }
-
-                Do not add markdown.
-                Do not add explanations.
-                Do not add extra fields.
-
-                User message:
-                """ + userMessage;
-
-        Map<String, Object> request =
-                Map.of(
-                        "contents",
-                        List.of(
-                                Map.of(
-                                        "parts",
-                                        List.of(
-                                                Map.of(
-                                                        "text",
-                                                        prompt
-                                                )
-                                        )
-                                )
-                        )
-                );
+            Map<String, Object> aiAnalysis) {
 
         try {
 
-            Map<String, Object> response =
-                    restClient
-                            .post()
-                            .uri(url)
-                            .header(
-                                    "x-goog-api-key",
-                                    apiKey
-                            )
-                            .header(
-                                    "Content-Type",
-                                    "application/json"
-                            )
-                            .body(request)
-                            .retrieve()
-                            .body(Map.class);
-
-            if (response == null) {
-
-                System.out.println(
-                        "Emotion analysis: Empty Gemini response."
-                );
+            if (aiAnalysis == null ||
+                    aiAnalysis.isEmpty()) {
 
                 return null;
             }
-
-            List<Map<String, Object>> candidates =
-                    (List<Map<String, Object>>)
-                            response.get("candidates");
-
-            if (candidates == null ||
-                    candidates.isEmpty()) {
-
-                System.out.println(
-                        "Emotion analysis: No candidates returned."
-                );
-
-                return null;
-            }
-
-            Map<String, Object> candidate =
-                    candidates.get(0);
-
-            Map<String, Object> content =
-                    (Map<String, Object>)
-                            candidate.get("content");
-
-            if (content == null) {
-
-                System.out.println(
-                        "Emotion analysis: No content returned."
-                );
-
-                return null;
-            }
-
-            List<Map<String, Object>> parts =
-                    (List<Map<String, Object>>)
-                            content.get("parts");
-
-            if (parts == null ||
-                    parts.isEmpty()) {
-
-                System.out.println(
-                        "Emotion analysis: No parts returned."
-                );
-
-                return null;
-            }
-
-            Object textObject =
-                    parts.get(0).get("text");
-
-            if (textObject == null) {
-
-                System.out.println(
-                        "Emotion analysis: No text returned."
-                );
-
-                return null;
-            }
-
-            String jsonText =
-                    textObject.toString();
-
-            System.out.println(
-                    "Raw emotion analysis: "
-                            + jsonText
-            );
-
-            return parseAndSave(
-                    conversationId,
-                    jsonText
-            );
-
-        } catch (Exception e) {
-
-            System.out.println(
-                    "Emotion analysis failed: "
-                            + e.getMessage()
-            );
-
-            return null;
-        }
-    }
-
-    private EmotionAnalysis parseAndSave(
-            Long conversationId,
-            String jsonText) {
-
-        try {
 
             /*
-             * Remove markdown code blocks if Gemini
-             * accidentally returns them.
+             * ----------------------------------------------------
+             * Get NLP result
+             * ----------------------------------------------------
              */
-            jsonText = cleanJson(jsonText);
+
+            Object nlpObject =
+                    aiAnalysis.get("nlp");
+
+            Map<String, Object> nlp =
+                    nlpObject instanceof Map
+                            ? (Map<String, Object>) nlpObject
+                            : Map.of();
 
             /*
-             * Extract values.
+             * ----------------------------------------------------
+             * Get social-cue result
+             * ----------------------------------------------------
              */
+
+            Object socialCuesObject =
+                    aiAnalysis.get("social_cues");
+
+            Map<String, Object> socialCues =
+                    socialCuesObject instanceof Map
+                            ? (Map<String, Object>) socialCuesObject
+                            : Map.of();
+
+            /*
+             * ----------------------------------------------------
+             * Extract emotion
+             * ----------------------------------------------------
+             */
+
             String emotion =
-                    extractStringValue(
-                            jsonText,
-                            "emotion"
+                    extractEmotion(
+                            nlp,
+                            socialCues
                     );
+
+            /*
+             * ----------------------------------------------------
+             * Extract distress
+             * ----------------------------------------------------
+             */
 
             String distressLevel =
-                    extractStringValue(
-                            jsonText,
-                            "distressLevel"
+                    extractDistressLevel(
+                            socialCues
                     );
+
+            /*
+             * ----------------------------------------------------
+             * Extract risk
+             * ----------------------------------------------------
+             */
 
             String riskLevel =
-                    extractStringValue(
-                            jsonText,
-                            "riskLevel"
-                    );
-
-            String confidenceValue =
-                    extractRawValue(
-                            jsonText,
-                            "confidence"
+                    extractRiskLevel(
+                            socialCues
                     );
 
             /*
-             * Validate emotion.
+             * ----------------------------------------------------
+             * Extract confidence
+             * ----------------------------------------------------
              */
-            if (!isValidEmotion(emotion)) {
 
-                System.out.println(
-                        "Invalid emotion: "
-                                + emotion
-                );
+            Double confidence =
+                    extractConfidence(
+                            nlp,
+                            socialCues
+                    );
 
-                return null;
+            /*
+             * ----------------------------------------------------
+             * Normalize
+             * ----------------------------------------------------
+             */
+
+            emotion =
+                    normalizeEmotion(
+                            emotion
+                    );
+
+            distressLevel =
+                    normalizeDistressLevel(
+                            distressLevel
+                    );
+
+            riskLevel =
+                    normalizeRiskLevel(
+                            riskLevel
+                    );
+
+            /*
+             * ----------------------------------------------------
+             * Defaults
+             * ----------------------------------------------------
+             */
+
+            if (emotion == null ||
+                    emotion.isBlank()) {
+
+                emotion = "Unknown";
+            }
+
+            if (distressLevel == null ||
+                    distressLevel.isBlank()) {
+
+                distressLevel = "Low";
+            }
+
+            if (riskLevel == null ||
+                    riskLevel.isBlank()) {
+
+                riskLevel = "Low";
+            }
+
+            if (confidence == null) {
+
+                confidence = 0.0;
             }
 
             /*
-             * Validate distress level.
+             * Keep confidence between 0 and 1.
              */
-            if (!isValidDistressLevel(
-                    distressLevel)) {
 
-                System.out.println(
-                        "Invalid distress level: "
-                                + distressLevel
-                );
-
-                return null;
-            }
+            confidence =
+                    Math.max(
+                            0.0,
+                            Math.min(
+                                    1.0,
+                                    confidence
+                            )
+                    );
 
             /*
-             * Validate risk level.
+             * ----------------------------------------------------
+             * Create database entity
+             * ----------------------------------------------------
              */
-            if (!isValidRiskLevel(
-                    riskLevel)) {
 
-                System.out.println(
-                        "Invalid risk level: "
-                                + riskLevel
-                );
-
-                return null;
-            }
-
-            /*
-             * Convert confidence.
-             */
-            Double confidence;
-
-            try {
-
-                confidence =
-                        Double.parseDouble(
-                                confidenceValue
-                        );
-
-            } catch (Exception e) {
-
-                System.out.println(
-                        "Invalid confidence value: "
-                                + confidenceValue
-                );
-
-                return null;
-            }
-
-            /*
-             * Make sure confidence stays
-             * between 0 and 1.
-             */
-            if (confidence < 0.0 ||
-                    confidence > 1.0) {
-
-                System.out.println(
-                        "Confidence outside valid range: "
-                                + confidence
-                );
-
-                return null;
-            }
-
-            /*
-             * Create analysis entity.
-             */
             EmotionAnalysis analysis =
                     new EmotionAnalysis(
                             conversationId,
@@ -339,179 +222,475 @@ public class EmotionAnalysisService {
                     );
 
             /*
-             * Save valid analysis.
+             * ----------------------------------------------------
+             * Save
+             * ----------------------------------------------------
              */
+
             return emotionAnalysisRepository.save(
                     analysis
             );
 
         } catch (Exception e) {
 
-            System.out.println(
-                    "Could not parse emotion analysis: "
-                            + e.getMessage()
+            log.warn(
+                    "Failed to save emotion analysis: {}",
+                    e.getMessage()
             );
 
             return null;
         }
     }
 
-    private String cleanJson(
-            String jsonText) {
+    /*
+     * ============================================================
+     * EXTRACT EMOTION
+     * ============================================================
+     */
 
-        jsonText =
-                jsonText
-                        .replace(
-                                "```json",
-                                ""
-                        )
-                        .replace(
-                                "```JSON",
-                                ""
-                        )
-                        .replace(
-                                "```",
-                                ""
-                        )
-                        .trim();
+    private String extractEmotion(
+            Map<String, Object> nlp,
+            Map<String, Object> socialCues) {
 
         /*
-         * If Gemini accidentally places text before
-         * or after the JSON, keep only the JSON object.
+         * Example Python result:
+         *
+         * "primary_emotion": {
+         *     "label": "sadness",
+         *     "score": 0.9871
+         * }
          */
-        int start =
-                jsonText.indexOf("{");
 
-        int end =
-                jsonText.lastIndexOf("}");
+        Object primaryEmotion =
+                nlp.get("primary_emotion");
 
-        if (start >= 0 &&
-                end >= start) {
+        if (primaryEmotion instanceof Map) {
 
-            jsonText =
-                    jsonText.substring(
-                            start,
-                            end + 1
-                    );
+            Map<?, ?> emotionMap =
+                    (Map<?, ?>) primaryEmotion;
+
+            Object label =
+                    emotionMap.get("label");
+
+            if (label != null) {
+
+                return label.toString();
+            }
         }
 
-        return jsonText.trim();
+        /*
+         * Fallback:
+         *
+         * social_cues.dominant_emotion
+         */
+
+        Object dominantEmotion =
+                socialCues.get(
+                        "dominant_emotion"
+                );
+
+        if (dominantEmotion != null) {
+
+            return dominantEmotion.toString();
+        }
+
+        return null;
     }
 
-    private String extractStringValue(
-            String json,
-            String key) {
+    /*
+     * ============================================================
+     * EXTRACT DISTRESS
+     * ============================================================
+     */
 
-        String value =
-                extractRawValue(
-                        json,
-                        key
+    private String extractDistressLevel(
+            Map<String, Object> socialCues) {
+
+        /*
+         * If the Python service directly provides
+         * distressLevel, use it.
+         */
+
+        Object value =
+                socialCues.get(
+                        "distressLevel"
                 );
 
-        return value
-                .replace("\"", "")
-                .trim();
+        if (value != null) {
+
+            return value.toString();
+        }
+
+        /*
+         * Your current Python service provides:
+         *
+         * distress_score
+         *
+         * Current example:
+         *
+         * distress_score = 2
+         *
+         * Therefore:
+         *
+         * 0-1 -> Low
+         * 2-3 -> Moderate
+         * 4+  -> High
+         */
+
+        Double distressScore =
+                convertToDouble(
+                        socialCues.get(
+                                "distress_score"
+                        )
+                );
+
+        if (distressScore != null) {
+
+            if (distressScore >= 4) {
+
+                return "High";
+
+            } else if (distressScore >= 2) {
+
+                return "Moderate";
+
+            } else {
+
+                return "Low";
+            }
+        }
+
+        /*
+         * Boolean fallback.
+         */
+
+        Object distress =
+                socialCues.get(
+                        "distress"
+                );
+
+        if (Boolean.TRUE.equals(distress)) {
+
+            return "Moderate";
+        }
+
+        return "Low";
     }
 
-    private String extractRawValue(
-            String json,
-            String key) {
+    /*
+     * ============================================================
+     * EXTRACT RISK
+     * ============================================================
+     */
 
-        String search =
-                "\"" + key + "\"";
+    private String extractRiskLevel(
+            Map<String, Object> socialCues) {
 
-        int keyIndex =
-                json.indexOf(search);
+        /*
+         * If Python provides riskLevel directly,
+         * use it.
+         */
 
-        if (keyIndex == -1) {
+        Object value =
+                socialCues.get(
+                        "riskLevel"
+                );
 
-            return "";
+        if (value != null) {
+
+            return value.toString();
         }
 
-        int colonIndex =
-                json.indexOf(
-                        ":",
-                        keyIndex
+        /*
+         * Current Python engine does not return
+         * a riskLevel directly.
+         *
+         * We derive it from the available signals.
+         */
+
+        Object severeDistress =
+                socialCues.get(
+                        "severe_distress"
                 );
 
-        if (colonIndex == -1) {
+        if (Boolean.TRUE.equals(
+                severeDistress)) {
 
-            return "";
+            return "Elevated";
         }
 
-        int commaIndex =
-                json.indexOf(
-                        ",",
-                        colonIndex
+        Double distressScore =
+                convertToDouble(
+                        socialCues.get(
+                                "distress_score"
+                        )
                 );
 
-        int closingBraceIndex =
-                json.indexOf(
-                        "}",
-                        colonIndex
+        if (distressScore != null) {
+
+            if (distressScore >= 4) {
+
+                return "Elevated";
+
+            } else if (distressScore >= 2) {
+
+                return "Moderate";
+
+            } else {
+
+                return "Low";
+            }
+        }
+
+        return "Low";
+    }
+
+    /*
+     * ============================================================
+     * EXTRACT CONFIDENCE
+     * ============================================================
+     */
+
+    private Double extractConfidence(
+            Map<String, Object> nlp,
+            Map<String, Object> socialCues) {
+
+        /*
+         * Try explicit confidence.
+         */
+
+        Double confidence =
+                convertToDouble(
+                        nlp.get("confidence")
                 );
 
-        int endIndex;
+        if (confidence != null) {
 
-        if (commaIndex == -1) {
+            return confidence;
+        }
 
-            endIndex =
-                    closingBraceIndex;
+        confidence =
+                convertToDouble(
+                        socialCues.get(
+                                "confidence"
+                        )
+                );
 
-        } else if (closingBraceIndex == -1) {
+        if (confidence != null) {
 
-            endIndex =
-                    commaIndex;
+            return confidence;
+        }
 
-        } else {
+        /*
+         * Use primary emotion score.
+         */
 
-            endIndex =
-                    Math.min(
-                            commaIndex,
-                            closingBraceIndex
+        Object primaryEmotion =
+                nlp.get(
+                        "primary_emotion"
+                );
+
+        if (primaryEmotion instanceof Map) {
+
+            Map<?, ?> emotionMap =
+                    (Map<?, ?>)
+                            primaryEmotion;
+
+            confidence =
+                    convertToDouble(
+                            emotionMap.get(
+                                    "score"
+                            )
                     );
+
+            if (confidence != null) {
+
+                return confidence;
+            }
         }
 
-        if (endIndex == -1) {
+        /*
+         * Fallback to social cue emotion score.
+         */
 
-            return "";
+        confidence =
+                convertToDouble(
+                        socialCues.get(
+                                "emotion_score"
+                        )
+                );
+
+        if (confidence != null) {
+
+            return confidence;
         }
 
-        return json.substring(
-                        colonIndex + 1,
-                        endIndex
+        /*
+         * Final fallback to sentiment score.
+         */
+
+        return convertToDouble(
+                socialCues.get(
+                        "sentiment_score"
                 )
-                .trim();
+        );
     }
 
-    private boolean isValidEmotion(
+    /*
+     * ============================================================
+     * CONVERT TO DOUBLE
+     * ============================================================
+     */
+
+    private Double convertToDouble(
+            Object value) {
+
+        if (value == null) {
+
+            return null;
+        }
+
+        try {
+
+            return Double.parseDouble(
+                    value.toString()
+            );
+
+        } catch (Exception e) {
+
+            return null;
+        }
+    }
+
+    /*
+     * ============================================================
+     * NORMALIZE EMOTION
+     * ============================================================
+     */
+
+    private String normalizeEmotion(
             String emotion) {
 
-        return emotion.equals("Positive")
-                || emotion.equals("Neutral")
-                || emotion.equals("Stress")
-                || emotion.equals("Anxiety-like")
-                || emotion.equals("Sadness")
-                || emotion.equals("Anger")
-                || emotion.equals("Fear")
-                || emotion.equals("Confusion");
+        if (emotion == null) {
+
+            return null;
+        }
+
+        String value =
+                emotion.trim();
+
+        if (value.equalsIgnoreCase("positive")) {
+            return "Positive";
+        }
+
+        if (value.equalsIgnoreCase("neutral")) {
+            return "Neutral";
+        }
+
+        if (value.equalsIgnoreCase("stress")) {
+            return "Stress";
+        }
+
+        if (value.equalsIgnoreCase("anxiety") ||
+                value.equalsIgnoreCase("anxiety-like")) {
+
+            return "Anxiety-like";
+        }
+
+        if (value.equalsIgnoreCase("sad") ||
+                value.equalsIgnoreCase("sadness")) {
+
+            return "Sadness";
+        }
+
+        if (value.equalsIgnoreCase("anger") ||
+                value.equalsIgnoreCase("angry")) {
+
+            return "Anger";
+        }
+
+        if (value.equalsIgnoreCase("fear")) {
+            return "Fear";
+        }
+
+        if (value.equalsIgnoreCase("confusion") ||
+                value.equalsIgnoreCase("confused")) {
+
+            return "Confusion";
+        }
+
+        return value;
     }
 
-    private boolean isValidDistressLevel(
+    /*
+     * ============================================================
+     * NORMALIZE DISTRESS
+     * ============================================================
+     */
+
+    private String normalizeDistressLevel(
             String distressLevel) {
 
-        return distressLevel.equals("Low")
-                || distressLevel.equals("Moderate")
-                || distressLevel.equals("High");
+        if (distressLevel == null) {
+
+            return null;
+        }
+
+        String value =
+                distressLevel.trim();
+
+        if (value.equalsIgnoreCase("low")) {
+            return "Low";
+        }
+
+        if (value.equalsIgnoreCase("moderate")) {
+            return "Moderate";
+        }
+
+        if (value.equalsIgnoreCase("high")) {
+            return "High";
+        }
+
+        return value;
     }
 
-    private boolean isValidRiskLevel(
+    /*
+     * ============================================================
+     * NORMALIZE RISK
+     * ============================================================
+     */
+
+    private String normalizeRiskLevel(
             String riskLevel) {
 
-        return riskLevel.equals("Low")
-                || riskLevel.equals("Moderate")
-                || riskLevel.equals("Elevated");
+        if (riskLevel == null) {
+
+            return null;
+        }
+
+        String value =
+                riskLevel.trim();
+
+        if (value.equalsIgnoreCase("low")) {
+            return "Low";
+        }
+
+        if (value.equalsIgnoreCase("moderate")) {
+            return "Moderate";
+        }
+
+        if (value.equalsIgnoreCase("elevated")) {
+            return "Elevated";
+        }
+
+        return value;
     }
+
+    /*
+     * ============================================================
+     * GET ANALYSIS FOR CONVERSATION
+     * ============================================================
+     */
 
     public List<EmotionAnalysis> getByConversationId(
             Long conversationId) {
@@ -522,40 +701,37 @@ public class EmotionAnalysisService {
                 );
     }
 
+    /*
+     * ============================================================
+     * GET RECENT ANALYSES
+     * ============================================================
+     */
+
     public List<EmotionAnalysis> getRecentAnalyses(
             Long userId,
             int limit) {
 
-        List<Conversation> conversations =
-                conversationRepository
-                        .findByUserIdOrderByCreatedAtDesc(
-                                userId
-                        );
+        int max = Math.max(1, Math.min(limit, 100));
+        return emotionAnalysisRepository.findRecentByUserId(
+                userId,
+                PageRequest.of(0, max)
+        );
+    }
 
-        List<EmotionAnalysis> results =
-                new ArrayList<>();
+    /*
+     * ============================================================
+     * GET LATEST ANALYSIS FOR USER
+     * ============================================================
+     */
 
-        for (Conversation conversation :
-                conversations) {
+    public EmotionAnalysis getLatestByUserId(Long userId) {
 
-            List<EmotionAnalysis> analyses =
-                    emotionAnalysisRepository
-                            .findByConversationId(
-                                    conversation.getId()
-                            );
+        List<EmotionAnalysis> analyses =
+                emotionAnalysisRepository.findRecentByUserId(
+                        userId,
+                        PageRequest.of(0, 1)
+                );
 
-            for (EmotionAnalysis analysis :
-                    analyses) {
-
-                results.add(analysis);
-
-                if (results.size() >= limit) {
-
-                    return results;
-                }
-            }
-        }
-
-        return results;
+        return analyses.isEmpty() ? null : analyses.get(0);
     }
 }

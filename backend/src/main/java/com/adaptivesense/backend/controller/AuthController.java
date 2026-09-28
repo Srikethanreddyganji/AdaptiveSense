@@ -6,12 +6,14 @@ import com.adaptivesense.backend.dto.RegisterRequest;
 import com.adaptivesense.backend.dto.UserResponse;
 import com.adaptivesense.backend.entity.User;
 import com.adaptivesense.backend.service.AuthService;
+
+import jakarta.validation.Valid;
+
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/auth")
-@CrossOrigin(origins = "http://localhost:5173")
 public class AuthController {
 
     private final AuthService authService;
@@ -22,7 +24,7 @@ public class AuthController {
 
     @PostMapping("/register")
     public ResponseEntity<UserResponse> register(
-            @RequestBody RegisterRequest request) {
+            @Valid @RequestBody RegisterRequest request) {
 
         User user = authService.register(request);
 
@@ -37,10 +39,20 @@ public class AuthController {
 
     @PostMapping("/login")
     public ResponseEntity<LoginResponse> login(
-            @RequestBody LoginRequest request) {
+            @Valid @RequestBody LoginRequest request) {
 
         return ResponseEntity.ok(
                 authService.login(request)
+        );
+    }
+
+    @GetMapping("/health")
+    public ResponseEntity<java.util.Map<String, String>> health() {
+        return ResponseEntity.ok(
+                java.util.Map.of(
+                        "status", "ok",
+                        "service", "AdaptiveSense Backend"
+                )
         );
     }
 }

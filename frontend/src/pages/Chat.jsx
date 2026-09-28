@@ -1,44 +1,43 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../services/api";
+import { clearSession } from "../utils/session";
 import "./Chat.css";
 
 function Chat() {
     const navigate = useNavigate();
 
-    const userId = localStorage.getItem("userId");
-
     const userName =
         localStorage.getItem("userName") || "User";
 
-    const [messages, setMessages] = useState([]);
+    const [messages, setMessages] = useState([
+        {
+            id: "welcome",
+            role: "assistant",
+            text:
+                "Hello, I’m AdaptiveSense.\n\n" +
+                "How are you feeling today?\n\n" +
+                "I’m here to listen and support you. " +
+                "Feel free to share what’s on your mind.",
+            time: new Date()
+        }
+    ]);
     const [message, setMessage] = useState("");
     const [loading, setLoading] = useState(false);
+    const [safetyNotice, setSafetyNotice] =
+        useState(false);
 
     const [listening, setListening] = useState(false);
-    const [speechSupported, setSpeechSupported] =
-        useState(true);
+    const [speechSupported] = useState(() => {
+        if (typeof window === "undefined") return false;
+        return Boolean(
+            window.SpeechRecognition ||
+            window.webkitSpeechRecognition
+        );
+    });
 
     const messagesContainerRef = useRef(null);
     const recognitionRef = useRef(null);
-
-    /*
-     * Initial welcome message
-     */
-    useEffect(() => {
-        setMessages([
-            {
-                id: "welcome",
-                role: "assistant",
-                text:
-                    "Hello, I’m AdaptiveSense.\n\n" +
-                    "How are you feeling today?\n\n" +
-                    "I’m here to listen and support you. " +
-                    "Feel free to share what’s on your mind.",
-                time: new Date()
-            }
-        ]);
-    }, []);
 
     /*
      * Speech recognition
@@ -49,7 +48,6 @@ function Chat() {
             window.webkitSpeechRecognition;
 
         if (!SpeechRecognition) {
-            setSpeechSupported(false);
             return;
         }
 
@@ -99,7 +97,7 @@ function Chat() {
         return () => {
             try {
                 recognition.stop();
-            } catch (error) {
+            } catch {
                 // Recognition was already stopped.
             }
 
@@ -210,16 +208,6 @@ function Chat() {
             return;
         }
 
-        if (!userId) {
-            alert(
-                "User session not found. Please login again."
-            );
-
-            navigate("/login");
-
-            return;
-        }
-
         if (
             listening &&
             recognitionRef.current
@@ -250,10 +238,15 @@ function Chat() {
                 await api.post(
                     "/chat",
                     {
-                        userId: userId,
                         message: trimmedMessage
                     }
                 );
+
+            setSafetyNotice(
+                Boolean(
+                    response.data?.safetyEscalation
+                )
+            );
 
             const assistantText =
                 response.data?.response ||
@@ -358,11 +351,7 @@ function Chat() {
      * Logout
      */
     const handleLogout = () => {
-        localStorage.removeItem("token");
-        localStorage.removeItem("userId");
-        localStorage.removeItem("userName");
-        localStorage.removeItem("userEmail");
-
+        clearSession();
         navigate("/login");
     };
 
@@ -824,6 +813,16 @@ function Chat() {
 
                     </div>
 
+
+                    {safetyNotice && (
+
+                        <p className="composer-note safety-notice">
+                            If you are in crisis, contact local emergency
+                            services or a crisis helpline (e.g. 988 in the US).
+                            AdaptiveSense is not a substitute for professional care.
+                        </p>
+
+                    )}
 
                     <p className="composer-note">
                         AdaptiveSense provides emotional support,

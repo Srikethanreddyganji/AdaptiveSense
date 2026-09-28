@@ -15,4 +15,8 @@ public interface ConversationRepository
     List<Conversation> findByUserIdOrderByCreatedAtDesc(
             Long userId
     );
+
+    List<Conversation> findTop10ByUserIdOrderByCreatedAtDesc(
+            Long userId
+    );
 }

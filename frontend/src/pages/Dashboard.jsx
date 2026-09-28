@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { clearSession } from "../utils/session";
 import "./Dashboard.css";
 
 function Dashboard() {
@@ -17,11 +18,7 @@ function Dashboard() {
     };
 
     const handleLogout = () => {
-        localStorage.removeItem("token");
-        localStorage.removeItem("userId");
-        localStorage.removeItem("userName");
-        localStorage.removeItem("userEmail");
-
+        clearSession();
         navigate("/login");
     };
 

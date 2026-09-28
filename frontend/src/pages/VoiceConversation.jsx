@@ -14,7 +14,15 @@ function VoiceConversation() {
     const [speaking, setSpeaking] = useState(false);
     const [loading, setLoading] = useState(false);
 
-    const [error, setError] = useState("");
+    const [error, setError] = useState(() => {
+        if (typeof window === "undefined") return "";
+        const SpeechRecognition =
+            window.SpeechRecognition ||
+            window.webkitSpeechRecognition;
+        return SpeechRecognition
+            ? ""
+            : "Speech recognition is not supported in this browser. Please use Google Chrome.";
+    });
 
     const recognitionRef = useRef(null);
 
@@ -108,22 +116,12 @@ function VoiceConversation() {
     };
 
     useEffect(() => {
-        const SpeechRecognition =
-            window.SpeechRecognition ||
-            window.webkitSpeechRecognition;
-
-        if (!SpeechRecognition) {
-            setError(
-                "Speech recognition is not supported in this browser. Please use Google Chrome."
-            );
-        }
-
         return () => {
             if (recognitionRef.current) {
                 try {
                     recognitionRef.current.stop();
-                } catch (error) {
-                    console.log("Recognition already stopped.");
+                } catch {
+                    // Recognition already stopped.
                 }
             }
 
@@ -179,7 +177,7 @@ function VoiceConversation() {
 
         try {
             recognition.stop();
-        } catch (error) {
+        } catch {
             console.log("Recognition already stopped.");
         }
 
@@ -228,13 +226,9 @@ function VoiceConversation() {
         setError("");
 
         try {
-            const userId =
-                localStorage.getItem("userId");
-
             const result = await api.post(
                 "/chat",
                 {
-                    userId: userId,
                     message: transcript.trim()
                 }
             );
@@ -272,7 +266,7 @@ function VoiceConversation() {
         if (recognitionRef.current) {
             try {
                 recognitionRef.current.stop();
-            } catch (error) {
+            } catch {
                 console.log("Recognition already stopped.");
             }
         }

@@ -4,39 +4,49 @@ import com.adaptivesense.backend.dto.LoginRequest;
 import com.adaptivesense.backend.dto.LoginResponse;
 import com.adaptivesense.backend.dto.RegisterRequest;
 import com.adaptivesense.backend.entity.User;
+import com.adaptivesense.backend.exception.ApiException;
 import com.adaptivesense.backend.repository.UserRepository;
 import com.adaptivesense.backend.security.JwtService;
-import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AuthService {
 
     private final UserRepository userRepository;
-    private final BCryptPasswordEncoder passwordEncoder;
+    private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
 
     public AuthService(
             UserRepository userRepository,
+            PasswordEncoder passwordEncoder,
             JwtService jwtService) {
 
         this.userRepository = userRepository;
-        this.passwordEncoder = new BCryptPasswordEncoder();
+        this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
     }
 
     public User register(RegisterRequest request) {
 
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new RuntimeException("Email already registered");
+        String normalizedEmail = request.getEmail().trim().toLowerCase();
+
+        if (userRepository.existsByEmail(normalizedEmail)) {
+
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "Email already registered"
+            );
         }
 
         String hashedPassword =
                 passwordEncoder.encode(request.getPassword());
 
         User user = new User(
-                request.getName(),
-                request.getEmail(),
+                request.getName().trim(),
+                normalizedEmail,
                 hashedPassword
         );
 
@@ -45,16 +55,24 @@ public class AuthService {
 
     public LoginResponse login(LoginRequest request) {
 
+        String normalizedEmail = request.getEmail().trim().toLowerCase();
+
         User user = userRepository
-                .findByEmail(request.getEmail())
+                .findByEmail(normalizedEmail)
                 .orElseThrow(() ->
-                        new RuntimeException("Invalid email or password"));
+                        new ApiException(
+                                HttpStatus.UNAUTHORIZED,
+                                "Invalid email or password"
+                        ));
 
         if (!passwordEncoder.matches(
                 request.getPassword(),
                 user.getPassword())) {
 
-            throw new RuntimeException("Invalid email or password");
+            throw new ApiException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Invalid email or password"
+            );
         }
 
         String token = jwtService.generateToken(user);

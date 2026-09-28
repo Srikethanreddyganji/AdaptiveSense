@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../services/api";
+import { clearSession } from "../utils/session";
 import "./ConversationHistory.css";
 
 function ConversationHistory() {
@@ -30,29 +31,13 @@ function ConversationHistory() {
      * Load conversation history
      */
     const loadHistory = async () => {
-
-        const userId =
-            localStorage.getItem("userId");
-
-        if (!userId) {
-
-            setError(
-                "User session not found. Please login again."
-            );
-
-            setLoading(false);
-
-            return;
-        }
-
         setLoading(true);
         setError("");
 
         try {
-
             const response =
                 await api.get(
-                    `/chat/history/${userId}`
+                    "/chat/history"
                 );
 
             const history =
@@ -62,9 +47,6 @@ function ConversationHistory() {
 
             /*
              * Newest conversations first.
-             *
-             * This is done only if the backend does
-             * not already provide the order.
              */
             const sortedHistory =
                 [...history].sort(
@@ -77,20 +59,18 @@ function ConversationHistory() {
                 sortedHistory
             );
 
-        } catch (error) {
-
+        } catch (err) {
             console.error(
                 "Conversation history error:",
-                error
+                err
             );
 
             setError(
-                error.response?.data?.message ||
+                err.response?.data?.message ||
                 "Unable to load your conversation history."
             );
 
         } finally {
-
             setLoading(false);
         }
     };
@@ -100,9 +80,34 @@ function ConversationHistory() {
      * Load when page opens
      */
     useEffect(() => {
+        let isMounted = true;
 
-        loadHistory();
+        api.get("/chat/history")
+            .then((response) => {
+                if (!isMounted) return;
+                const history = Array.isArray(response.data) ? response.data : [];
+                const sortedHistory = [...history].sort(
+                    (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+                );
+                setConversations(sortedHistory);
+            })
+            .catch((err) => {
+                if (!isMounted) return;
+                console.error("Conversation history error:", err);
+                setError(
+                    err.response?.data?.message ||
+                    "Unable to load your conversation history."
+                );
+            })
+            .finally(() => {
+                if (isMounted) {
+                    setLoading(false);
+                }
+            });
 
+        return () => {
+            isMounted = false;
+        };
     }, []);
 
 
@@ -110,12 +115,7 @@ function ConversationHistory() {
      * Logout
      */
     const handleLogout = () => {
-
-        localStorage.removeItem("token");
-        localStorage.removeItem("userId");
-        localStorage.removeItem("userName");
-        localStorage.removeItem("userEmail");
-
+        clearSession();
         navigate("/login");
     };
 

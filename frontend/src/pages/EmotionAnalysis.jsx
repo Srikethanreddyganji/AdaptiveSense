@@ -15,20 +15,11 @@ function EmotionAnalysis() {
 
         const loadLatestAnalysis = async () => {
 
-            const userId =
-                localStorage.getItem("userId");
-
-            if (!userId) {
-                setError("User session not found.");
-                setLoading(false);
-                return;
-            }
-
             try {
 
                 const response =
                     await api.get(
-                        `/chat/emotion/latest/${userId}`
+                        "/chat/emotion/latest"
                     );
 
                 setAnalysis(response.data);

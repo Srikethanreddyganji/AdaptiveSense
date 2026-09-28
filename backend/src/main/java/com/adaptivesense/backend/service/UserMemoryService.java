@@ -3,7 +3,10 @@ package com.adaptivesense.backend.service;
 import com.adaptivesense.backend.entity.UserMemory;
 import com.adaptivesense.backend.repository.UserMemoryRepository;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
@@ -13,8 +16,16 @@ import java.util.Map;
 @Service
 public class UserMemoryService {
 
+    private static final Logger log =
+            LoggerFactory.getLogger(
+                    UserMemoryService.class
+            );
+
     @Value("${gemini.api.key}")
     private String apiKey;
+
+    @Value("${gemini.model:gemini-1.5-flash}")
+    private String modelName;
 
     private final UserMemoryRepository userMemoryRepository;
     private final RestClient restClient;
@@ -38,7 +49,8 @@ public class UserMemoryService {
                 .orElse("");
     }
 
-    public void updateMemory(
+    @Async("memoryTaskExecutor")
+    public void updateMemoryAsync(
             Long userId,
             String userMessage) {
 
@@ -110,7 +122,8 @@ public class UserMemoryService {
 
             String url =
                     "https://generativelanguage.googleapis.com/v1beta/models/"
-                    + "gemini-3.5-flash-lite:generateContent";
+                    + modelName
+                    + ":generateContent";
 
             Map<String, Object> response =
                     restClient
@@ -172,9 +185,6 @@ public class UserMemoryService {
             updatedMemory =
                     updatedMemory.trim();
 
-            /*
-             * Keep memory reasonably small.
-             */
             if (updatedMemory.length() > 3000) {
 
                 updatedMemory =
@@ -189,45 +199,45 @@ public class UserMemoryService {
                     updatedMemory
             );
 
-            System.out.println(
-                    "Updated memory for user "
-                    + userId
-            );
-
         } catch (Exception e) {
 
-            /*
-             * Memory failure should NEVER prevent
-             * the main conversation from working.
-             */
-            System.out.println(
-                    "Memory update failed: "
-                    + e.getMessage()
+            log.warn(
+                    "Memory update failed for user {}: {}",
+                    userId,
+                    e.getMessage()
             );
         }
     }
 
-    private void saveMemory(
+    private synchronized void saveMemory(
             Long userId,
             String memoryText) {
 
-        UserMemory memory =
-                userMemoryRepository
-                        .findByUserId(userId)
-                        .orElseGet(
-                                () ->
-                                        new UserMemory(
-                                                userId,
-                                                memoryText
-                                        )
-                        );
+        try {
+            UserMemory memory =
+                    userMemoryRepository
+                            .findByUserId(userId)
+                            .orElseGet(
+                                    () ->
+                                            new UserMemory(
+                                                    userId,
+                                                    memoryText
+                                            )
+                            );
 
-        memory.setMemory(
-                memoryText
-        );
+            memory.setMemory(
+                    memoryText
+            );
 
-        userMemoryRepository.save(
-                memory
-        );
+            userMemoryRepository.save(
+                    memory
+            );
+        } catch (Exception ex) {
+            log.debug("Concurrent save memory conflict for user {}, retrying update: {}", userId, ex.getMessage());
+            userMemoryRepository.findByUserId(userId).ifPresent(existing -> {
+                existing.setMemory(memoryText);
+                userMemoryRepository.save(existing);
+            });
+        }
     }
 }

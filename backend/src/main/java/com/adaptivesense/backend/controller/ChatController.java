@@ -1,33 +1,41 @@
 package com.adaptivesense.backend.controller;
 
+import com.adaptivesense.backend.dto.ChatRequest;
 import com.adaptivesense.backend.entity.Conversation;
 import com.adaptivesense.backend.entity.EmotionAnalysis;
 import com.adaptivesense.backend.repository.ConversationRepository;
+import com.adaptivesense.backend.security.AuthenticatedUser;
+import com.adaptivesense.backend.service.AIAnalysisService;
 import com.adaptivesense.backend.service.EmotionAnalysisService;
 import com.adaptivesense.backend.service.GeminiService;
 import com.adaptivesense.backend.service.UserMemoryService;
 
+import jakarta.validation.Valid;
+
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 @RestController
 @RequestMapping("/api/chat")
-@CrossOrigin(origins = "http://localhost:5173")
 public class ChatController {
 
     private final ConversationRepository conversationRepository;
     private final GeminiService geminiService;
     private final EmotionAnalysisService emotionAnalysisService;
     private final UserMemoryService userMemoryService;
+    private final AIAnalysisService aiAnalysisService;
 
     public ChatController(
             ConversationRepository conversationRepository,
             GeminiService geminiService,
             EmotionAnalysisService emotionAnalysisService,
-            UserMemoryService userMemoryService) {
+            UserMemoryService userMemoryService,
+            AIAnalysisService aiAnalysisService) {
 
         this.conversationRepository =
                 conversationRepository;
@@ -40,50 +48,98 @@ public class ChatController {
 
         this.userMemoryService =
                 userMemoryService;
+
+        this.aiAnalysisService =
+                aiAnalysisService;
     }
-
-
-    /*
-     * ================================
-     * CHAT
-     * ================================
-     */
 
     @PostMapping
     public ResponseEntity<Map<String, Object>> chat(
-            @RequestBody Map<String, Object> request) {
+            @AuthenticationPrincipal AuthenticatedUser user,
+            @Valid @RequestBody ChatRequest request) {
 
-        String message =
-                (String) request.get("message");
+        Long userId = user.getUserId();
+        String message = request.getMessage();
 
-        Long userId =
-                Long.valueOf(
-                        request.get("userId").toString()
+        List<Conversation> recentConversations =
+                new ArrayList<>(
+                        conversationRepository
+                                .findTop10ByUserIdOrderByCreatedAtDesc(
+                                        userId
+                                )
                 );
+        java.util.Collections.reverse(recentConversations);
 
-        System.out.println(
-                "User ID: " + userId
-        );
+        List<Map<String, String>> conversationContext =
+                new ArrayList<>();
 
-        System.out.println(
-                "User message: " + message
-        );
+        for (Conversation conversation :
+                recentConversations) {
 
+            conversationContext.add(
+                    Map.of(
+                            "user",
+                            conversation.getUserMessage(),
 
-        /*
-         * Generate AI response.
-         */
+                            "assistant",
+                            conversation.getAssistantResponse()
+                    )
+            );
+        }
+
+        Map<String, Object> previousEmotion =
+                Map.of();
+
+        if (!recentConversations.isEmpty()) {
+
+            Conversation latestConversation =
+                    recentConversations.get(
+                            recentConversations.size() - 1
+                    );
+
+            List<EmotionAnalysis> previousAnalyses =
+                    emotionAnalysisService
+                            .getByConversationId(
+                                    latestConversation.getId()
+                            );
+
+            if (!previousAnalyses.isEmpty()) {
+
+                EmotionAnalysis latest =
+                        previousAnalyses.get(
+                                previousAnalyses.size() - 1
+                        );
+
+                previousEmotion =
+                        Map.of(
+                                "emotion",
+                                latest.getEmotion(),
+
+                                "distressLevel",
+                                latest.getDistressLevel(),
+
+                                "riskLevel",
+                                latest.getRiskLevel(),
+
+                                "confidence",
+                                latest.getConfidence()
+                        );
+            }
+        }
+
+        Map<String, Object> aiAnalysis =
+                aiAnalysisService.analyze(
+                        message,
+                        conversationContext,
+                        previousEmotion
+                );
 
         String response =
                 geminiService.generateResponse(
                         userId,
-                        message
+                        message,
+                        aiAnalysis
                 );
-
-
-        /*
-         * Save conversation.
-         */
 
         Conversation conversation =
                 new Conversation(
@@ -96,31 +152,16 @@ public class ChatController {
                 conversation
         );
 
-
-        /*
-         * Analyze emotional signals.
-         */
-
         EmotionAnalysis analysis =
-                emotionAnalysisService.analyzeEmotion(
+                emotionAnalysisService.saveAnalysis(
                         conversation.getId(),
-                        message
+                        aiAnalysis
                 );
 
-
-        /*
-         * Update long-term memory.
-         */
-
-        userMemoryService.updateMemory(
+        userMemoryService.updateMemoryAsync(
                 userId,
                 message
         );
-
-
-        /*
-         * Return response.
-         */
 
         return ResponseEntity.ok(
                 Map.of(
@@ -145,27 +186,26 @@ public class ChatController {
                         "confidence",
                         analysis != null
                                 ? analysis.getConfidence()
-                                : 0.0
+                                : 0.0,
+
+                        "safetyEscalation",
+                        analysis != null
+                                && "Elevated".equalsIgnoreCase(
+                                        analysis.getRiskLevel()
+                                )
                 )
         );
     }
 
-
-    /*
-     * ================================
-     * CONVERSATION HISTORY
-     * ================================
-     */
-
-    @GetMapping("/history/{userId}")
+    @GetMapping("/history")
     public ResponseEntity<List<Conversation>>
     getConversationHistory(
-            @PathVariable Long userId) {
+            @AuthenticationPrincipal AuthenticatedUser user) {
 
         List<Conversation> conversations =
                 conversationRepository
                         .findByUserIdOrderByCreatedAtDesc(
-                                userId
+                                user.getUserId()
                         );
 
         return ResponseEntity.ok(
@@ -173,87 +213,47 @@ public class ChatController {
         );
     }
 
-
-    /*
-     * ================================
-     * LATEST EMOTION
-     * ================================
-     */
-
-    @GetMapping("/emotion/latest/{userId}")
+    @GetMapping("/emotion/latest")
     public ResponseEntity<?> getLatestEmotion(
-            @PathVariable Long userId) {
+            @AuthenticationPrincipal AuthenticatedUser user) {
 
-        List<Conversation> conversations =
-                conversationRepository
-                        .findByUserIdOrderByCreatedAtDesc(
-                                userId
-                        );
+        EmotionAnalysis latest =
+                emotionAnalysisService.getLatestByUserId(
+                        user.getUserId()
+                );
 
-        if (conversations.isEmpty()) {
-
+        if (latest == null) {
             return ResponseEntity
                     .notFound()
                     .build();
         }
 
+        return ResponseEntity.ok(
+                Map.of(
+                        "emotion",
+                        latest.getEmotion(),
 
-        for (Conversation conversation :
-                conversations) {
+                        "distressLevel",
+                        latest.getDistressLevel(),
 
-            List<EmotionAnalysis> analyses =
-                    emotionAnalysisService
-                            .getByConversationId(
-                                    conversation.getId()
-                            );
+                        "riskLevel",
+                        latest.getRiskLevel(),
 
-            if (!analyses.isEmpty()) {
-
-                EmotionAnalysis latest =
-                        analyses.get(
-                                analyses.size() - 1
-                        );
-
-                return ResponseEntity.ok(
-                        Map.of(
-                                "emotion",
-                                latest.getEmotion(),
-
-                                "distressLevel",
-                                latest.getDistressLevel(),
-
-                                "riskLevel",
-                                latest.getRiskLevel(),
-
-                                "confidence",
-                                latest.getConfidence()
-                        )
-                );
-            }
-        }
-
-
-        return ResponseEntity
-                .notFound()
-                .build();
+                        "confidence",
+                        latest.getConfidence()
+                )
+        );
     }
 
-
-    /*
-     * ================================
-     * EMOTION HISTORY
-     * ================================
-     */
-
-    @GetMapping("/emotion/history/{userId}")
+    @GetMapping("/emotion/history")
     public ResponseEntity<List<EmotionAnalysis>>
     getEmotionHistory(
-            @PathVariable Long userId) {
+            @AuthenticationPrincipal AuthenticatedUser user) {
 
         List<EmotionAnalysis> history =
                 emotionAnalysisService
                         .getRecentAnalyses(
-                                userId,
+                                user.getUserId(),
                                 10
                         );
 

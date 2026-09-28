@@ -15,25 +15,11 @@ function EmotionGraph() {
 
         const loadEmotionHistory = async () => {
 
-            const userId =
-                localStorage.getItem("userId");
-
-            if (!userId) {
-
-                setError(
-                    "User session not found."
-                );
-
-                setLoading(false);
-
-                return;
-            }
-
             try {
 
                 const response =
                     await api.get(
-                        `/chat/emotion/history/${userId}`
+                        "/chat/emotion/history"
                     );
 
                 setHistory(
