@@ -8,7 +8,6 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestClient;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 @Service
@@ -19,7 +18,7 @@ public class AIAnalysisService {
 
     private final RestClient restClient;
 
-    @Value("${ai.service.url}")
+    @Value("${ai.service.url:http://localhost:8000}")
     private String aiServiceUrl;
 
     @Value("${ai.service.internal-key:}")
@@ -27,6 +26,24 @@ public class AIAnalysisService {
 
     public AIAnalysisService(RestClient.Builder builder) {
         this.restClient = builder.build();
+    }
+
+    private String resolveAiServiceUrl() {
+        if (aiServiceUrl == null || aiServiceUrl.isBlank()) {
+            return "http://localhost:8000";
+        }
+        String trimmed = aiServiceUrl.trim();
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+            if (trimmed.contains(".onrender.com")) {
+                trimmed = "https://" + trimmed;
+            } else {
+                trimmed = "http://" + trimmed;
+            }
+        }
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
     }
 
     public Map<String, Object> analyze(
@@ -51,36 +68,22 @@ public class AIAnalysisService {
                         : Map.of()
         );
 
+        String baseUrl = resolveAiServiceUrl();
+        String targetUrl = baseUrl + "/analyze";
+
         try {
-
-            log.info(
-                    "AI SERVICE URL: {}",
-                    aiServiceUrl
-            );
-
-            log.debug(
-                    "AI REQUEST: {}",
-                    request
-            );
+            log.info("Sending NLP analysis request to: {}", targetUrl);
+            log.debug("AI REQUEST: {}", request);
 
             RestClient.RequestBodySpec spec =
                     restClient
                             .post()
-                            .uri(aiServiceUrl + "/analyze")
-                            .contentType(
-                                    MediaType.APPLICATION_JSON
-                            )
-                            .accept(
-                                    MediaType.APPLICATION_JSON
-                            );
+                            .uri(targetUrl)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .accept(MediaType.APPLICATION_JSON);
 
-            if (internalKey != null &&
-                    !internalKey.isBlank()) {
-
-                spec = spec.header(
-                        "X-Internal-Key",
-                        internalKey
-                );
+            if (internalKey != null && !internalKey.isBlank()) {
+                spec = spec.header("X-Internal-Key", internalKey);
             }
 
             Map<String, Object> response =
@@ -90,33 +93,20 @@ public class AIAnalysisService {
                             .body(Map.class);
 
             if (response == null) {
-
-                log.warn(
-                        "AI service returned an empty response"
-                );
-
+                log.warn("AI service returned an empty response");
                 return emptyAnalysis();
             }
 
-            log.info(
-                    "AI RESPONSE RECEIVED SUCCESSFULLY"
-            );
-
+            log.info("AI RESPONSE RECEIVED SUCCESSFULLY from {}", targetUrl);
             return response;
 
         } catch (Exception e) {
-
-            log.error(
-                    "AI analysis service request failed",
-                    e
-            );
-
+            log.error("AI analysis service request failed at {}: {}", targetUrl, e.getMessage());
             return emptyAnalysis();
         }
     }
 
     private Map<String, Object> emptyAnalysis() {
-
         return Map.of(
                 "nlp",
                 Map.of(),
