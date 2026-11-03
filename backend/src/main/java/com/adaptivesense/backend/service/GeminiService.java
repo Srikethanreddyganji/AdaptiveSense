@@ -286,7 +286,7 @@ public class GeminiService {
          */
 
         Map<String, Object> generationConfig = Map.of(
-                "maxOutputTokens", 300
+                "maxOutputTokens", 1000
         );
 
         Map<String, Object> request = Map.of(
