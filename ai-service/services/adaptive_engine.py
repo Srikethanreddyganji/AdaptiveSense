@@ -8,7 +8,8 @@ class AdaptiveSocialCueEngine:
             text: str,
             nlp_result: dict,
             previous_conversation=None,
-            previous_emotion=None):
+            previous_emotion=None,
+            voice_emotion=None):
 
         text_lower = text.lower()
 
@@ -95,6 +96,29 @@ class AdaptiveSocialCueEngine:
         emotions = nlp_result.get(
             "emotions",
             []
+        )
+
+        voice_payload = (
+            voice_emotion
+            if isinstance(voice_emotion, dict)
+            else {}
+        )
+        voice_status = str(
+            voice_payload.get("status") or ""
+        ).lower()
+        voice_label_raw = voice_payload.get("label")
+        voice_label = (
+            str(voice_label_raw).lower()
+            if voice_label_raw
+            else None
+        )
+        try:
+            voice_score = float(voice_payload.get("score") or 0.0)
+        except (TypeError, ValueError):
+            voice_score = 0.0
+        voice_available = (
+            voice_status == "ok"
+            and voice_label is not None
         )
 
         # -----------------------------------------
@@ -252,6 +276,24 @@ class AdaptiveSocialCueEngine:
             or top_emotion_lower == "fear"
         )
 
+        voice_sadness_signal = (
+            voice_available and voice_label == "sadness"
+        )
+        voice_anger_signal = (
+            voice_available and voice_label == "anger"
+        )
+        voice_fear_signal = (
+            voice_available and voice_label == "fear"
+        )
+
+        if voice_label and top_emotion_lower:
+            if voice_label == top_emotion_lower:
+                modality_agreement = "agree"
+            else:
+                modality_agreement = "disagree"
+        else:
+            modality_agreement = "voice_unavailable"
+
         # -----------------------------------------
         # SOCIAL CUE SCORE
         # -----------------------------------------
@@ -271,6 +313,15 @@ class AdaptiveSocialCueEngine:
             social_cue_score += 1
 
         if anger_signal:
+            social_cue_score += 1
+
+        if voice_sadness_signal and voice_score >= 0.45:
+            social_cue_score += 1
+
+        if voice_anger_signal and voice_score >= 0.45:
+            social_cue_score += 1
+
+        if voice_fear_signal and voice_score >= 0.45:
             social_cue_score += 1
 
         # Previous context contributes
@@ -301,6 +352,15 @@ class AdaptiveSocialCueEngine:
             distress_score += 1
 
         if anger_signal:
+            distress_score += 1
+
+        if voice_sadness_signal and voice_score >= 0.6:
+            distress_score += 1
+
+        if (
+                (voice_anger_signal or voice_fear_signal)
+                and voice_score >= 0.6
+        ):
             distress_score += 1
 
         if social_withdrawal:
@@ -435,6 +495,17 @@ class AdaptiveSocialCueEngine:
 
             distress_level = "Low"
 
+        text_conf = top_emotion_score
+        if voice_available and text_conf >= 0.6 and voice_score >= 0.6:
+            if modality_agreement == "agree":
+                analysis_confidence = "high"
+            else:
+                analysis_confidence = "medium"
+        elif text_conf >= 0.45 or (voice_available and voice_score >= 0.45):
+            analysis_confidence = "medium"
+        else:
+            analysis_confidence = "low"
+
         # -----------------------------------------
         # RETURN RESULT
         # -----------------------------------------
@@ -501,5 +572,31 @@ class AdaptiveSocialCueEngine:
                 risk_level,
 
             "distressLevel":
-                distress_level
+                distress_level,
+
+            "text_emotion": {
+                "label": top_emotion,
+                "score": round(top_emotion_score, 4)
+            },
+
+            "voice_emotion": {
+                "label": voice_label,
+                "score": round(voice_score, 4) if voice_available else None,
+                "status": voice_status or "unavailable"
+            },
+
+            "modality_agreement":
+                modality_agreement,
+
+            "analysis_confidence":
+                analysis_confidence,
+
+            "voice_sadness_signal":
+                voice_sadness_signal,
+
+            "voice_anger_signal":
+                voice_anger_signal,
+
+            "voice_fear_signal":
+                voice_fear_signal
         }
