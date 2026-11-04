@@ -33,7 +33,7 @@ public class AuthService {
 
         String normalizedEmail = request.getEmail().trim().toLowerCase();
 
-        if (userRepository.existsByEmail(normalizedEmail)) {
+        if (userRepository.existsByEmailIgnoreCase(normalizedEmail)) {
 
             throw new ApiException(
                     HttpStatus.CONFLICT,
@@ -58,7 +58,7 @@ public class AuthService {
         String normalizedEmail = request.getEmail().trim().toLowerCase();
 
         User user = userRepository
-                .findByEmail(normalizedEmail)
+                .findByEmailIgnoreCase(normalizedEmail)
                 .orElseThrow(() ->
                         new ApiException(
                                 HttpStatus.UNAUTHORIZED,

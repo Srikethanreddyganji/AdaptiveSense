@@ -66,12 +66,7 @@ function Chat() {
             setListening(false);
         };
 
-        recognition.onerror = (event) => {
-            console.error(
-                "Speech recognition error:",
-                event.error
-            );
-
+        recognition.onerror = () => {
             setListening(false);
         };
 
@@ -189,11 +184,8 @@ function Chat() {
 
         try {
             recognitionRef.current.start();
-        } catch (error) {
-            console.error(
-                "Microphone error:",
-                error
-            );
+        } catch {
+            setListening(false);
         }
     };
 
@@ -270,12 +262,7 @@ function Chat() {
                 assistantMessage
             ]);
 
-        } catch (error) {
-            console.error(
-                "Chat error:",
-                error
-            );
-
+        } catch {
             const errorMessage = {
                 id: `error-${Date.now()}`,
                 role: "assistant",
@@ -506,6 +493,66 @@ function Chat() {
 
                         <span>
                             Emotional Insights
+                        </span>
+
+                    </button>
+
+
+                    <button
+                        className="sidebar-item"
+                        onClick={() =>
+                            navigate("/voice")
+                        }
+                    >
+
+                        <span className="sidebar-icon">
+
+                            <svg
+                                viewBox="0 0 24 24"
+                                aria-hidden="true"
+                            >
+
+                                <rect
+                                    x="9"
+                                    y="3"
+                                    width="6"
+                                    height="11"
+                                    rx="3"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                />
+
+                                <path
+                                    d="M5.5 11a6.5 6.5 0 0 0 13 0"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                    strokeLinecap="round"
+                                />
+
+                                <path
+                                    d="M12 17.5V21"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                    strokeLinecap="round"
+                                />
+
+                                <path
+                                    d="M9 21h6"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="1.8"
+                                    strokeLinecap="round"
+                                />
+
+                            </svg>
+
+                        </span>
+
+                        <span>
+                            Voice Conversation
                         </span>
 
                     </button>

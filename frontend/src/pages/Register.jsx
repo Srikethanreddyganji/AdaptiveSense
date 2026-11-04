@@ -27,18 +27,13 @@ function Register() {
 
         try {
 
-            const response = await api.post(
+            await api.post(
                 "/auth/register",
                 {
                     name,
                     email,
                     password
                 }
-            );
-
-            console.log(
-                "Registration response:",
-                response.data
             );
 
             setMessage(
@@ -52,11 +47,6 @@ function Register() {
             setPassword("");
 
         } catch (error) {
-
-            console.error(
-                "Registration error:",
-                error
-            );
 
             if (
                 error.response?.data?.message

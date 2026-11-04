@@ -97,6 +97,11 @@ public class EmotionAnalysisService {
                             ? (Map<String, Object>) socialCuesObject
                             : Map.of();
 
+            if (nlp.isEmpty() && socialCues.isEmpty()) {
+                log.warn("Skipping emotion persistence because analysis data is unavailable");
+                return null;
+            }
+
             /*
              * ----------------------------------------------------
              * Extract emotion
@@ -234,8 +239,8 @@ public class EmotionAnalysisService {
         } catch (Exception e) {
 
             log.warn(
-                    "Failed to save emotion analysis: {}",
-                    e.getMessage()
+                    "Failed to save emotion analysis ({})",
+                    e.getClass().getSimpleName()
             );
 
             return null;

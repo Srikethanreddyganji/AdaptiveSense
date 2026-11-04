@@ -13,6 +13,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -24,6 +25,15 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 # Pre-build quantized TorchScript model ahead of time during docker build
 COPY build_quantized_model.py .
 RUN python build_quantized_model.py && rm -rf /tmp/hf_cache
+
+# Keep only the model assets needed by the runtime voice and Whisper services.
+# This prevents first-request Hub lookups on memory-limited deployments.
+RUN python -c "from huggingface_hub import snapshot_download; patterns=['*.json','*.txt','*.model','*.safetensors']; snapshot_download(repo_id='superb/wav2vec2-base-superb-er', cache_dir='/tmp/hf_cache', allow_patterns=patterns); snapshot_download(repo_id='openai/whisper-tiny', cache_dir='/tmp/hf_cache', allow_patterns=patterns)"
+
+ENV HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    VOICE_EMOTION_LOCAL_FILES_ONLY=1 \
+    WHISPER_LOCAL_FILES_ONLY=1
 
 COPY . .
 

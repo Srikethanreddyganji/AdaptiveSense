@@ -30,12 +30,7 @@ function EmotionGraph() {
 
                 setError("");
 
-            } catch (error) {
-
-                console.error(
-                    "Emotion graph error:",
-                    error
-                );
+            } catch {
 
                 setError(
                     "Unable to load emotional trends."

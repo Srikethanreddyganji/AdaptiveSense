@@ -103,6 +103,11 @@ class AdaptiveSocialCueEngine:
             if isinstance(voice_emotion, dict)
             else {}
         )
+        acoustic_features = (
+            voice_payload.get("acoustic_features")
+            if isinstance(voice_payload.get("acoustic_features"), dict)
+            else {}
+        )
         voice_status = str(
             voice_payload.get("status") or ""
         ).lower()
@@ -598,5 +603,21 @@ class AdaptiveSocialCueEngine:
                 voice_anger_signal,
 
             "voice_fear_signal":
-                voice_fear_signal
+                voice_fear_signal,
+
+            "acoustic_summary": {
+                "mean_pitch_hz": acoustic_features.get("mean_pitch_hz"),
+                "pitch_std_hz": acoustic_features.get("pitch_std_hz"),
+                "pitch_variance_hz": acoustic_features.get("pitch_variance_hz"),
+                "speaking_rate": acoustic_features.get("speaking_rate"),
+                "pause_count": acoustic_features.get("pause_count"),
+                "total_pause_duration_seconds": acoustic_features.get("total_pause_duration_seconds"),
+                "average_pause_duration_seconds": acoustic_features.get("average_pause_duration_seconds"),
+                "pause_frequency_per_minute": acoustic_features.get("pause_frequency_per_minute"),
+                "rms_energy": acoustic_features.get("rms_energy"),
+                "energy_variation": acoustic_features.get("energy_variation"),
+                "intensity_variation_db": acoustic_features.get("intensity_variation_db"),
+                "zero_crossing_rate": acoustic_features.get("zero_crossing_rate"),
+                "clinical_disclaimer": "Acoustic signals are non-diagnostic, supportive context only."
+            }
         }

@@ -31,11 +31,6 @@ function Login() {
                 }
             );
 
-            console.log(
-                "Login response:",
-                response.data
-            );
-
             const {
                 token,
                 userId,
@@ -66,33 +61,16 @@ function Login() {
             navigate("/dashboard");
 
         } catch (error) {
+            const status = error.response?.status;
+            const serverMessage = error.response?.data?.message
+                || error.response?.data?.error;
 
-            console.error(
-                "Login error:",
-                error
-            );
-
-            if (
-                error.response?.data?.message
-            ) {
-
-                setMessage(
-                    error.response.data.message
-                );
-
-            } else if (
-                error.response?.data?.error
-            ) {
-
-                setMessage(
-                    error.response.data.error
-                );
-
+            if (status === 401) {
+                setMessage(serverMessage || "Invalid email or password.");
+            } else if (!error.response) {
+                setMessage("Unable to reach AdaptiveSense. Check that the backend is running and try again.");
             } else {
-
-                setMessage(
-                    "Invalid email or password."
-                );
+                setMessage(serverMessage || "Sign-in failed. Please try again.");
             }
 
         } finally {

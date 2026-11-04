@@ -52,6 +52,10 @@ public class Conversation {
         return assistantResponse;
     }
 
+    public void setAssistantResponse(String assistantResponse) {
+        this.assistantResponse = assistantResponse;
+    }
+
     public LocalDateTime getCreatedAt() {
         return createdAt;
     }

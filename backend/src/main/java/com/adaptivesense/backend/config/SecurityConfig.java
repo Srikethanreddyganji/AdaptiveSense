@@ -16,6 +16,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.DispatcherType;
 
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
@@ -64,10 +65,14 @@ public class SecurityConfig {
             )
 
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers(
-                    "/api/auth/**",
-                    "/error"
-                ).permitAll()
+                // MVC async work resumes on a second ASYNC dispatch. The original
+                // REQUEST still passes through JWT authentication below; this
+                // rule only prevents re-authorizing that continuation as anonymous.
+                .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
+                // ERROR dispatches are container error rendering. A direct REQUEST
+                // to /error still follows the authenticated fallback rule.
+                .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                .requestMatchers("/api/auth/**").permitAll()
                 .anyRequest().authenticated()
             )
 
@@ -127,7 +132,8 @@ public class SecurityConfig {
             List.of(
                 "Authorization",
                 "Content-Type",
-                "Accept"
+                "Accept",
+                "X-Request-ID"
             )
         );
 

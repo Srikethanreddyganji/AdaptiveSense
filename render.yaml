@@ -11,6 +11,8 @@ services:
     envVars:
       - key: AI_SERVICE_INTERNAL_KEY
         generateValue: true
+      - key: ENVIRONMENT
+        value: production
       - key: MALLOC_ARENA_MAX
         value: "2"
       - key: TORCH_NUM_THREADS
@@ -39,7 +41,7 @@ services:
       - key: GEMINI_API_KEY
         sync: false
       - key: GEMINI_MODEL
-        value: gemini-1.5-flash
+        value: gemini-3.8-flash
       - key: AI_SERVICE_URL
         fromService:
           type: web
@@ -51,7 +53,11 @@ services:
           name: adaptivesense-ai-service
           envVarKey: AI_SERVICE_INTERNAL_KEY
       - key: CORS_ALLOWED_ORIGINS
-        value: "*"
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: JPA_DDL_AUTO
+        value: validate
 
   # -------------------------------------------------------------
   # 3. Frontend Static Site (React 19 / Vite)
@@ -65,7 +71,4 @@ services:
     staticPublishPath: dist
     envVars:
       - key: VITE_API_URL
-        fromService:
-          type: web
-          name: adaptivesense-backend
-          property: host
+        sync: false

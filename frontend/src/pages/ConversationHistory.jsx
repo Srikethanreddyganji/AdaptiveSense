@@ -60,11 +60,6 @@ function ConversationHistory() {
             );
 
         } catch (err) {
-            console.error(
-                "Conversation history error:",
-                err
-            );
-
             setError(
                 err.response?.data?.message ||
                 "Unable to load your conversation history."
@@ -93,7 +88,6 @@ function ConversationHistory() {
             })
             .catch((err) => {
                 if (!isMounted) return;
-                console.error("Conversation history error:", err);
                 setError(
                     err.response?.data?.message ||
                     "Unable to load your conversation history."

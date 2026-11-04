@@ -148,6 +148,34 @@ function Dashboard() {
                         </span>
                     </button>
 
+
+                    {/* Voice Conversation */}
+
+                    <button
+                        className="sidebar-item"
+                        onClick={() => navigate("/voice")}
+                    >
+                        <span className="sidebar-icon">
+                            <svg
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            >
+                                <rect x="8" y="3" width="8" height="13" rx="4" />
+                                <path d="M5 11a7 7 0 0 0 14 0" />
+                                <path d="M12 18v3" />
+                                <path d="M9 21h6" />
+                            </svg>
+                        </span>
+
+                        <span>
+                            Voice Conversation
+                        </span>
+                    </button>
+
                 </nav>
 
 

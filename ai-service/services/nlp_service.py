@@ -29,7 +29,7 @@ class NLPService:
                 print("Pre-quantized INT8 NLP model loaded successfully into low-memory footprint.")
                 return
             except Exception as e:
-                print(f"Warning: Failed to load pre-quantized model ({e}). Attempting dynamic fallback.")
+                print(f"Warning: Failed to load pre-quantized model ({type(e).__name__}). Attempting dynamic fallback.")
 
         # 2. Fallback to on-demand lightweight load + quantization
         try:
@@ -51,13 +51,13 @@ class NLPService:
                 self.model.eval()
                 print("Dynamic INT8 quantization applied successfully.")
             except Exception as q_err:
-                print(f"Quantization skipped: {q_err}")
+                print(f"Quantization skipped ({type(q_err).__name__}).")
                 self.model = base_model
 
             self.model_loaded = True
             print("NLP model loaded successfully.")
         except Exception as e:
-            print(f"Warning: Failed to load transformer model ({e}). Using defensive lexicon NLP fallback.")
+            print(f"Warning: Failed to load transformer model ({type(e).__name__}). Using defensive lexicon NLP fallback.")
             self.model = None
             self.tokenizer = None
             self.model_loaded = False
@@ -157,7 +157,7 @@ class NLPService:
             }
 
         except Exception as e:
-            print(f"Error during transformer inference ({e}), falling back to lexicon analysis.")
+            print(f"Error during transformer inference ({type(e).__name__}), falling back to lexicon analysis.")
             return self._fallback_analyze(clean_text)
 
     def _fallback_analyze(self, text: str):

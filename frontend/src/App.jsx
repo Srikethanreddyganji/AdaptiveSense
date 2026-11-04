@@ -10,6 +10,7 @@ import Register from "./pages/Register";
 import Dashboard from "./pages/Dashboard";
 import Chat from "./pages/Chat";
 import VoiceConversation from "./pages/VoiceConversation";
+import VoiceErrorBoundary from "./components/VoiceErrorBoundary";
 import EmotionAnalysis from "./pages/EmotionAnalysis";
 import ConversationHistory from "./pages/ConversationHistory";
 import EmotionGraph from "./pages/EmotionGraph";
@@ -77,7 +78,9 @@ function App() {
                     path="/voice"
                     element={
                         <ProtectedRoute>
-                            <VoiceConversation />
+                            <VoiceErrorBoundary>
+                                <VoiceConversation />
+                            </VoiceErrorBoundary>
                         </ProtectedRoute>
                     }
                 />

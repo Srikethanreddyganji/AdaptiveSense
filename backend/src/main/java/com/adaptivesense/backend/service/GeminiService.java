@@ -1,5 +1,6 @@
 package com.adaptivesense.backend.service;
 
+import com.adaptivesense.backend.exception.ApiException;
 import com.adaptivesense.backend.entity.Conversation;
 import com.adaptivesense.backend.repository.ConversationRepository;
 
@@ -7,9 +8,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestClient;
 
+import java.net.SocketTimeoutException;
+import java.net.http.HttpTimeoutException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -22,7 +28,8 @@ public class GeminiService {
             LoggerFactory.getLogger(GeminiService.class);
 
     private static final String PRIMARY_MODEL = "gemini-3.8-flash";
-    private static final String FALLBACK_MODEL = "gemini-3.6-flash";
+    private static final long QUOTA_COOLDOWN_MS = 5 * 60 * 1000L;
+    private static volatile long quotaBlockedUntilEpochMs;
 
     @Value("${gemini.api.key:}")
     private String apiKey;
@@ -48,6 +55,16 @@ public class GeminiService {
             Long userId,
             String userMessage,
             Map<String, Object> aiAnalysis) {
+        return generateResponse(userId, userMessage, aiAnalysis, null);
+    }
+
+    public String generateResponse(
+            Long userId,
+            String userMessage,
+            Map<String, Object> aiAnalysis,
+            String requestId) {
+
+        String correlationId = requestId == null || requestId.isBlank() ? "unavailable" : requestId;
 
         if (apiKey == null
                 || apiKey.trim().isEmpty()
@@ -55,8 +72,14 @@ public class GeminiService {
 
             log.error("Gemini API key is not configured.");
 
-            return "I'm having trouble connecting to my response service right now. "
-                    + "Please try again in a moment.";
+            throw new ApiException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                    "The response service is not configured right now.", "GEMINI_UNAVAILABLE");
+        }
+
+        if (isQuotaCoolingDown()) {
+            throw new ApiException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+                    "The response service quota is temporarily unavailable. Your voice analysis was retained.",
+                    "GEMINI_QUOTA_EXCEEDED");
         }
 
         String configuredModel =
@@ -64,7 +87,7 @@ public class GeminiService {
                         ? PRIMARY_MODEL
                         : modelName.trim();
 
-        log.info("Using Gemini model: {}", configuredModel);
+        log.info("Using Gemini model request_id={}: {}", correlationId, configuredModel);
 
         /*
          * ---------------------------------------------------------
@@ -86,7 +109,14 @@ public class GeminiService {
          * ---------------------------------------------------------
          */
 
-        String userMemory = userMemoryService.getMemory(userId);
+        String userMemory;
+        try {
+            userMemory = userMemoryService.getMemory(userId);
+        } catch (RuntimeException exception) {
+            log.warn("Could not load conversation memory ({}); continuing without memory.",
+                    exception.getClass().getSimpleName());
+            userMemory = "";
+        }
 
         boolean severeDistress = isSevereDistress(aiAnalysis);
 
@@ -241,6 +271,31 @@ public class GeminiService {
 
         context.append("\n");
 
+        boolean isVoiceInput = aiAnalysis != null && (
+                "voice".equalsIgnoreCase(String.valueOf(aiAnalysis.get("input_mode")))
+                        || aiAnalysis.containsKey("acoustic_features")
+                        || aiAnalysis.containsKey("voice_emotion")
+        );
+
+        if (isVoiceInput) {
+            context.append("""
+
+                    VOICE MODALITY & ACOUSTIC CONTEXT:
+                    The user spoke this message via voice recording.
+                    Measurable acoustic voice features (pitch variation, speaking rate,
+                    pause patterns, vocal energy) and speech emotion indicators are provided
+                    above as supportive context.
+
+                    MANDATORY ACOUSTIC SAFETY AND ETHICAL GUIDELINE:
+                    - Treat all acoustic vocal signals as uncertain supportive context, NOT a diagnosis.
+                    - NEVER diagnose depression, anxiety, or any mental-health condition from their voice.
+                    - Never claim 'your voice indicates depression' or make clinical claims from speech acoustics.
+                    - Reflect warmth, empathy, and conversational presence naturally without clinical labeling.
+                    - Because this response may be spoken aloud, keep your phrasing clear, comforting, and natural to hear.
+
+                    """);
+        }
+
         /*
          * ---------------------------------------------------------
          * CURRENT USER MESSAGE
@@ -312,38 +367,26 @@ public class GeminiService {
          * ---------------------------------------------------------
          */
 
-        String response =
-                callGemini(
-                        configuredModel,
-                        request
-                );
+        String response;
+        try {
+            response = callGemini(configuredModel, request, correlationId);
+        } catch (GeminiQuotaException quotaException) {
+            markQuotaCooldown();
+            log.warn("Gemini rate limit or quota reached request_id={}; skipping retries and model fallback.",
+                    correlationId);
+            throw new ApiException(org.springframework.http.HttpStatus.TOO_MANY_REQUESTS,
+                    "The response service quota is temporarily unavailable. Your voice analysis was retained.",
+                    "GEMINI_QUOTA_EXCEEDED");
+        } catch (GeminiConfigurationException configurationException) {
+            log.error("Gemini rejected credentials or request request_id={} (HTTP {}).",
+                    correlationId, configurationException.statusCode);
+            throw new ApiException(org.springframework.http.HttpStatus.BAD_GATEWAY,
+                    "The response service rejected the request. Your voice analysis was retained.",
+                    "GEMINI_REQUEST_REJECTED");
+        }
 
         if (response != null && !response.isBlank()) {
             return response;
-        }
-
-        /*
-         * ---------------------------------------------------------
-         * FALLBACK MODEL
-         * ---------------------------------------------------------
-         */
-
-        if (!FALLBACK_MODEL.equals(configuredModel)) {
-
-            log.warn(
-                    "Primary Gemini model unavailable. Trying fallback model: {}",
-                    FALLBACK_MODEL
-            );
-
-            response =
-                    callGemini(
-                            FALLBACK_MODEL,
-                            request
-                    );
-
-            if (response != null && !response.isBlank()) {
-                return response;
-            }
         }
 
         /*
@@ -352,12 +395,11 @@ public class GeminiService {
          * ---------------------------------------------------------
          */
 
-        log.error(
-                "All Gemini response generation attempts failed."
-        );
+        log.error("All Gemini response generation attempts failed request_id={}", correlationId);
 
-        return "I'm having trouble generating a response right now. "
-                + "Please try sending your message again.";
+        throw new ApiException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                "The response service is temporarily unavailable. Your voice analysis was retained.",
+                "GEMINI_UNAVAILABLE");
     }
 
     /*
@@ -368,26 +410,25 @@ public class GeminiService {
 
     private String callGemini(
             String selectedModel,
-            Map<String, Object> request) {
+            Map<String, Object> request,
+            String requestId) {
 
         String targetUrl =
                 "https://generativelanguage.googleapis.com/v1beta/models/"
                         + selectedModel
-                        + ":generateContent?key="
-                        + apiKey.trim();
+                        + ":generateContent";
 
+        // Retry one transient provider overload only. Quota, timeout, transport,
+        // authentication, and malformed responses are never retried here.
         int maxAttempts = 2;
 
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+            long requestStarted = System.nanoTime();
 
             try {
 
-                log.info(
-                        "Sending request to Gemini model {} (attempt {}/{})",
-                        selectedModel,
-                        attempt,
-                        maxAttempts
-                );
+                log.info("Sending request to Gemini request_id={} model={} (attempt {}/{})",
+                        requestId, selectedModel, attempt, maxAttempts);
 
                 Map<String, Object> response =
                         restClient
@@ -397,10 +438,7 @@ public class GeminiService {
                                         "Content-Type",
                                         "application/json"
                                 )
-                                .header(
-                                        "x-goog-api-key",
-                                        apiKey.trim()
-                                )
+                                .header("x-goog-api-key", apiKey.trim())
                                 .body(request)
                                 .retrieve()
                                 .body(Map.class);
@@ -411,7 +449,7 @@ public class GeminiService {
                             "Gemini returned an empty response."
                     );
 
-                    continue;
+                    return null;
                 }
 
                 /*
@@ -426,12 +464,10 @@ public class GeminiService {
                 if (!(candidatesObject instanceof List<?> candidates)
                         || candidates.isEmpty()) {
 
-                    log.error(
-                            "Gemini returned no candidates: {}",
-                            response
-                    );
+                    log.warn("Gemini returned no candidates (response omitted). finishReason={}",
+                            response.get("promptFeedback"));
 
-                    continue;
+                    return null;
                 }
 
                 Object firstCandidateObject =
@@ -443,7 +479,7 @@ public class GeminiService {
                             "Invalid Gemini candidate."
                     );
 
-                    continue;
+                    return null;
                 }
 
                 /*
@@ -461,7 +497,7 @@ public class GeminiService {
                             "Gemini candidate contained no content."
                     );
 
-                    continue;
+                    return null;
                 }
 
                 /*
@@ -480,7 +516,7 @@ public class GeminiService {
                             "Gemini response contained no parts."
                     );
 
-                    continue;
+                    return null;
                 }
 
                 Object firstPartObject =
@@ -492,7 +528,7 @@ public class GeminiService {
                             "Invalid Gemini response part."
                     );
 
-                    continue;
+                    return null;
                 }
 
                 Object textObject =
@@ -504,7 +540,7 @@ public class GeminiService {
                             "Gemini returned no response text."
                     );
 
-                    continue;
+                    return null;
                 }
 
                 String generatedText =
@@ -516,56 +552,58 @@ public class GeminiService {
                             "Gemini returned empty response text."
                     );
 
-                    continue;
+                    return null;
                 }
 
-                log.info(
-                        "Gemini response generated successfully using {}.",
-                        selectedModel
-                );
+                log.info("Gemini conversational response generated request_id={} (model={}, elapsed_ms={}).",
+                        requestId, selectedModel, elapsedMs(requestStarted));
 
                 return generatedText;
 
-            } catch (HttpServerErrorException.ServiceUnavailable e) {
-
-                /*
-                 * 503 means Gemini is temporarily unavailable.
-                 */
-
-                log.warn(
-                        "Gemini model {} returned 503 Service Unavailable.",
-                        selectedModel
-                );
-
-                if (attempt < maxAttempts) {
-
+            } catch (HttpClientErrorException.TooManyRequests e) {
+                throw new GeminiQuotaException();
+            } catch (HttpClientErrorException e) {
+                throw new GeminiConfigurationException(e.getStatusCode().value());
+            } catch (HttpServerErrorException e) {
+                int status = e.getStatusCode().value();
+                if (status == 503 && attempt < maxAttempts) {
+                    log.warn("Gemini returned a transient unavailable status; retrying once "
+                                    + "(request_id={}, status={}, model={}).",
+                            requestId, status, selectedModel);
                     try {
-
-                        long waitTime = 1500L * attempt;
-
-                        log.info(
-                                "Waiting {} ms before retrying {}.",
-                                waitTime,
-                                selectedModel
-                        );
-
-                        Thread.sleep(waitTime);
-
-                    } catch (InterruptedException interruptedException) {
-
+                        Thread.sleep(250);
+                    } catch (InterruptedException interrupted) {
                         Thread.currentThread().interrupt();
-
-                        return null;
+                        throw new ApiException(org.springframework.http.HttpStatus.SERVICE_UNAVAILABLE,
+                                "The response service is temporarily unavailable. Your voice analysis was retained.",
+                                "GEMINI_UNAVAILABLE");
                     }
+                    continue;
                 }
+                log.warn("Gemini conversational request failed (request_id={}, status={}, attempt={}, model={}, elapsed_ms={}).",
+                        requestId, status, attempt, selectedModel, elapsedMs(requestStarted));
+                return null;
+
+            } catch (ResourceAccessException e) {
+                String category = isTimeout(e) ? "timeout" : "transport";
+                log.warn("Gemini conversational request failed (request_id={}, category={}, model={}, cause={}, elapsed_ms={}).",
+                        requestId, category, selectedModel, rootCause(e).getClass().getSimpleName(),
+                        elapsedMs(requestStarted));
+                if (isTimeout(e)) {
+                    throw new ApiException(org.springframework.http.HttpStatus.GATEWAY_TIMEOUT,
+                            "The response service took too long. Your voice analysis was retained.",
+                            "GEMINI_TIMEOUT");
+                }
+                return null;
+
+            } catch (RestClientResponseException e) {
+                log.warn("Gemini conversational request failed (request_id={}, status={}, model={}, elapsed_ms={}).",
+                        requestId, e.getStatusCode().value(), selectedModel, elapsedMs(requestStarted));
+                return null;
 
             } catch (Exception e) {
-
-                log.error(
-                        "Gemini API call failed for model {}: {}",
-                        selectedModel,
-                        e.getMessage()
-                );
+                log.error("Gemini conversational request failed (request_id={}, model={}, exception={}, elapsed_ms={}).",
+                        requestId, selectedModel, e.getClass().getSimpleName(), elapsedMs(requestStarted));
 
                 /*
                  * Do not retry obvious configuration or request errors
@@ -577,6 +615,46 @@ public class GeminiService {
         }
 
         return null;
+    }
+
+    private static long elapsedMs(long startedAtNanos) {
+        return java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedAtNanos);
+    }
+
+    private static boolean isTimeout(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof SocketTimeoutException
+                    || current instanceof HttpTimeoutException
+                    || current instanceof java.util.concurrent.TimeoutException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private static Throwable rootCause(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private static final class GeminiQuotaException extends RuntimeException { }
+
+    static boolean isQuotaCoolingDown() {
+        return System.currentTimeMillis() < quotaBlockedUntilEpochMs;
+    }
+
+    static void markQuotaCooldown() {
+        quotaBlockedUntilEpochMs = System.currentTimeMillis() + QUOTA_COOLDOWN_MS;
+    }
+
+    private static final class GeminiConfigurationException extends RuntimeException {
+        private final int statusCode;
+        private GeminiConfigurationException(int statusCode) { this.statusCode = statusCode; }
     }
 
     /*

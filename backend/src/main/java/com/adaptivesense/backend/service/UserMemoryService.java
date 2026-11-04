@@ -8,6 +8,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.HttpClientErrorException;
+import org.springframework.web.client.HttpServerErrorException;
+import org.springframework.web.client.ResourceAccessException;
+import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.client.RestClient;
 
 import java.util.List;
@@ -48,6 +52,16 @@ public class UserMemoryService {
     public void updateMemoryAsync(
             Long userId,
             String userMessage) {
+
+        if (apiKey == null || apiKey.isBlank() || "your-gemini-api-key".equalsIgnoreCase(apiKey.trim())) {
+            log.debug("Skipping memory update because Gemini credentials are not configured.");
+            return;
+        }
+
+        if (GeminiService.isQuotaCoolingDown()) {
+            log.debug("Skipping memory update during Gemini quota cooldown.");
+            return;
+        }
 
         try {
 
@@ -103,8 +117,6 @@ public class UserMemoryService {
                             ? "gemini-3.8-flash"
                             : modelName.trim();
 
-            String fallbackModel = "gemini-3.6-flash";
-
             /*
              * ---------------------------------------------------------
              * PRIMARY MODEL
@@ -116,34 +128,16 @@ public class UserMemoryService {
                     primaryModel
             );
 
-            String updatedMemory =
-                    generateMemoryWithRetry(
-                            primaryModel,
-                            prompt,
-                            2
-                    );
-
-            /*
-             * ---------------------------------------------------------
-             * FALLBACK MODEL
-             * ---------------------------------------------------------
-             */
-
-            if (updatedMemory == null
-                    && !primaryModel.equals(fallbackModel)) {
-
-                log.warn(
-                        "Primary Gemini model unavailable for memory update. "
-                                + "Trying fallback model: {}",
-                        fallbackModel
-                );
-
-                updatedMemory =
-                        generateMemoryWithRetry(
-                                fallbackModel,
-                                prompt,
-                                2
-                        );
+            String updatedMemory;
+            try {
+                updatedMemory = generateMemory(primaryModel, prompt);
+            } catch (MemoryQuotaException e) {
+                GeminiService.markQuotaCooldown();
+                log.warn("Gemini rate limit or quota reached during memory update; skipping further Gemini calls.");
+                return;
+            } catch (MemoryClientException e) {
+                log.warn("Gemini rejected the memory update request (HTTP {}).", e.statusCode);
+                return;
             }
 
             /*
@@ -180,11 +174,7 @@ public class UserMemoryService {
 
         } catch (Exception e) {
 
-            log.warn(
-                    "Memory update failed for user {}: {}",
-                    userId,
-                    e.getMessage()
-            );
+            log.warn("Memory update failed for user {} ({})", userId, e.getClass().getSimpleName());
         }
     }
 
@@ -194,10 +184,7 @@ public class UserMemoryService {
      * -------------------------------------------------------------
      */
 
-    private String generateMemoryWithRetry(
-            String model,
-            String prompt,
-            int maxAttempts) {
+    private String generateMemory(String model, String prompt) {
 
         Map<String, Object> request =
                 Map.of(
@@ -220,18 +207,13 @@ public class UserMemoryService {
                         + model
                         + ":generateContent";
 
-        for (int attempt = 1;
-             attempt <= maxAttempts;
-             attempt++) {
+        for (int requestNumber = 0; requestNumber < 1; requestNumber++) {
 
             try {
 
                 log.info(
-                        "Sending memory request to Gemini model {} "
-                                + "(attempt {}/{})",
-                        model,
-                        attempt,
-                        maxAttempts
+                        "Sending memory request to Gemini model {}",
+                        model
                 );
 
                 Map<String, Object> response =
@@ -391,51 +373,52 @@ public class UserMemoryService {
 
                 return updatedMemory;
 
+            } catch (HttpClientErrorException.TooManyRequests e) {
+                throw new MemoryQuotaException();
+            } catch (HttpClientErrorException e) {
+                throw new MemoryClientException(e.getStatusCode().value());
+            } catch (HttpServerErrorException e) {
+                log.warn("Gemini memory request failed (status={}, model={}).",
+                        e.getStatusCode().value(), model);
+                return null;
+            } catch (ResourceAccessException e) {
+                log.warn("Gemini memory request failed (category=transport, model={}, cause={}).",
+                        model, rootCause(e).getClass().getSimpleName());
+                return null;
+            } catch (RestClientResponseException e) {
+                log.warn("Gemini memory request failed (status={}, model={}).",
+                        e.getStatusCode().value(), model);
+                return null;
             } catch (Exception e) {
 
-                log.warn(
-                        "Gemini memory request failed for model {} "
-                                + "on attempt {}/{}: {}",
-                        model,
-                        attempt,
-                        maxAttempts,
-                        e.getMessage()
-                );
+                log.warn("Gemini memory request failed for model {} ({})",
+                        model, e.getClass().getSimpleName());
 
-                if (attempt < maxAttempts) {
-
-                    try {
-
-                        long waitTime =
-                                1500L * attempt;
-
-                        log.info(
-                                "Waiting {} ms before retrying memory "
-                                        + "request to {}.",
-                                waitTime,
-                                model
-                        );
-
-                        Thread.sleep(waitTime);
-
-                    } catch (InterruptedException interruptedException) {
-
-                        Thread.currentThread().interrupt();
-
-                        return null;
-                    }
-                }
+                return null;
             }
         }
 
         log.warn(
-                "Gemini memory generation failed for model {} "
-                        + "after {} attempts.",
-                model,
-                maxAttempts
+                "Gemini memory generation failed for model {}.",
+                model
         );
 
         return null;
+    }
+
+    private static Throwable rootCause(Throwable throwable) {
+        Throwable current = throwable;
+        while (current.getCause() != null && current.getCause() != current) {
+            current = current.getCause();
+        }
+        return current;
+    }
+
+    private static final class MemoryQuotaException extends RuntimeException { }
+
+    private static final class MemoryClientException extends RuntimeException {
+        private final int statusCode;
+        private MemoryClientException(int statusCode) { this.statusCode = statusCode; }
     }
 
     /*
@@ -469,9 +452,9 @@ public class UserMemoryService {
 
             log.debug(
                     "Concurrent save memory conflict for user {}, "
-                            + "retrying update: {}",
+                            + "retrying update ({})",
                     userId,
-                    ex.getMessage()
+                    ex.getClass().getSimpleName()
             );
 
             userMemoryRepository

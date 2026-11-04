@@ -26,7 +26,9 @@ public class GlobalExceptionHandler {
                 .status(exception.getStatus())
                 .body(Map.of(
                         "message",
-                        exception.getMessage()
+                        exception.getMessage(),
+                        "code",
+                        exception.getCode()
                 ));
     }
 
@@ -50,7 +52,7 @@ public class GlobalExceptionHandler {
     public ResponseEntity<Map<String, String>> handleGeneric(
             Exception exception) {
 
-        log.error("Unhandled application exception: ", exception);
+        log.error("Unhandled application exception ({})", exception.getClass().getSimpleName());
 
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)

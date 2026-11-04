@@ -27,11 +27,6 @@ function EmotionAnalysis() {
 
             } catch (error) {
 
-                console.error(
-                    "Emotion analysis error:",
-                    error
-                );
-
                 if (error.response?.status === 404) {
 
                     setError(
