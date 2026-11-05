@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import api from "../services/api";
-import { chatRequestErrorMessage } from "../services/chatErrors";
+import { postChatStream, ChatStreamError } from "../services/chatSse";
 import { clearSession } from "../utils/session";
 import "./Chat.css";
 
@@ -133,7 +132,7 @@ function Chat() {
 
             container.scrollTo({
                 top: container.scrollHeight,
-                behavior: "smooth"
+                behavior: lastMessage.streaming ? "auto" : "smooth"
             });
         });
     }, [messages]);
@@ -219,61 +218,53 @@ function Chat() {
             text: trimmedMessage,
             time: new Date()
         };
+        const assistantId = `assistant-${Date.now()}`;
+        const assistantMessage = {
+            id: assistantId,
+            role: "assistant",
+            text: "",
+            time: new Date(),
+            streaming: true,
+        };
 
         /*
          * Add the user's message immediately.
          */
         setMessages((previous) => [
             ...previous,
-            userMessage
+            userMessage,
+            assistantMessage,
         ]);
 
         setMessage("");
         setLoading(true);
 
         try {
-            const response =
-                await api.post(
-                    "/chat",
-                    {
-                        message: trimmedMessage
-                    }
-                );
+            const streamedText = { value: "" };
+            const response = await postChatStream(trimmedMessage, {
+                onDelta: (delta) => {
+                    streamedText.value += delta;
+                    setMessages((previous) => previous.map((item) => item.id === assistantId
+                        ? { ...item, text: streamedText.value }
+                        : item));
+                },
+            });
 
-            setSafetyNotice(
-                Boolean(
-                    response.data?.safetyEscalation
-                )
-            );
-
-            const assistantText = String(response.data?.response || "").trim();
+            setSafetyNotice(Boolean(response?.safetyEscalation));
+            const assistantText = String(response?.response || streamedText.value).trim();
             if (!assistantText) {
                 throw new Error("The response service returned an empty response.");
             }
 
-            const assistantMessage = {
-                id: `assistant-${Date.now()}`,
-                role: "assistant",
-                text: assistantText,
-                time: new Date()
-            };
-
-            /*
-             * Add the actual assistant response.
-             *
-             * The scroll effect above will now move
-             * the conversation to this response.
-             */
-            setMessages((previous) => [
-                ...previous,
-                assistantMessage
-            ]);
+            setMessages((previous) => previous.map((item) => item.id === assistantId
+                ? { ...item, text: assistantText, streaming: false }
+                : item));
 
         } catch (error) {
-            setMessages((previous) => previous.filter((item) => item.id !== userMessage.id));
+            setMessages((previous) => previous.filter((item) => item.id !== userMessage.id && item.id !== assistantId));
             setMessage((previous) => previous || trimmedMessage);
-            setChatError(error?.response || error?.request
-                ? chatRequestErrorMessage(error)
+            setChatError(error instanceof ChatStreamError
+                ? error.message
                 : "The response service returned no reply. Your message is ready to retry.");
 
         } finally {
@@ -688,7 +679,7 @@ function Chat() {
                                                     : "message-bubble assistant-bubble"
                                             }
                                         >
-                                            {item.text}
+                                            {item.text || (item.streaming ? "…" : "")}
                                         </div>
 
 
@@ -711,7 +702,7 @@ function Chat() {
                         )}
 
 
-                        {loading && (
+                        {loading && !messages.some((item) => item.streaming) && (
 
                             <div className="message-row assistant-message-row">
 

@@ -32,6 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -98,7 +99,7 @@ class ChatControllerTest {
         when(aiAnalysisService.analyzeVoice(any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockAiResult);
 
-        when(chatResponseService.generateResponse(eq(1L), eq("I felt overwhelmed today but I am holding on."), eq(mockAiResult)))
+        when(chatResponseService.generateResponseStream(eq(1L), eq("I felt overwhelmed today but I am holding on."), eq(mockAiResult), isNull(), any()))
                 .thenReturn("I hear that it has been a difficult day. What feels most important right now?");
 
         when(conversationRepository.save(any(Conversation.class)))
@@ -150,7 +151,11 @@ class ChatControllerTest {
         );
         when(conversationRepository.findTop10ByUserIdOrderByCreatedAtDesc(1L)).thenReturn(List.of());
         when(aiAnalysisService.analyzeVoice(any(), any(), any(), any(), any(), any())).thenReturn(analysis);
-        when(chatResponseService.generateResponse(1L, "I feel ready to talk.", analysis)).thenReturn("I am listening.");
+        when(chatResponseService.generateResponseStream(eq(1L), eq("I feel ready to talk."), eq(analysis), isNull(), any()))
+                .thenAnswer(invocation -> {
+                    invocation.<Consumer<String>>getArgument(4).accept("I am listening.");
+                    return "I am listening.";
+                });
         when(conversationRepository.save(any(Conversation.class))).thenAnswer(inv -> inv.getArgument(0));
         when(emotionAnalysisService.saveAnalysis(any(), eq(analysis))).thenReturn(null);
 
@@ -164,11 +169,43 @@ class ChatControllerTest {
         assertTrue(events.contains("\"stage\":\"response\""));
         assertTrue(events.contains("event: analysis"));
         assertTrue(events.contains("event: response"));
+        assertTrue(events.contains("\"delta\":\"I am listening.\""));
         assertTrue(events.contains("event: complete"));
         assertTrue(events.contains("\"response\":\"I am listening.\""));
         assertEquals(1, events.split("event: complete", -1).length - 1);
         assertTrue(events.indexOf("event: analysis") < events.indexOf("\"stage\":\"response\""));
         assertTrue(events.indexOf("event: response") < events.indexOf("event: complete"));
+    }
+
+    @Test
+    void textStreamForwardsDeltasAndCompletesOnceAfterPersistence() throws Exception {
+        ReflectionTestUtils.setField(chatController, "objectMapper", new ObjectMapper());
+        Map<String, Object> analysis = Map.of("nlp", Map.of("primary_emotion", Map.of("label", "calm")));
+        when(conversationRepository.findTop10ByUserIdOrderByCreatedAtDesc(1L)).thenReturn(List.of());
+        when(aiAnalysisService.analyze(eq("I feel calmer."), any(), any())).thenReturn(analysis);
+        when(chatResponseService.generateResponseStream(eq(1L), eq("I feel calmer."), eq(analysis), isNull(), any()))
+                .thenAnswer(invocation -> {
+                    Consumer<String> delta = invocation.getArgument(4);
+                    delta.accept("That sounds ");
+                    delta.accept("like a welcome change.");
+                    return "That sounds like a welcome change.";
+                });
+        when(conversationRepository.save(any(Conversation.class))).thenAnswer(invocation -> invocation.getArgument(0));
+        when(emotionAnalysisService.saveAnalysis(any(), eq(analysis))).thenReturn(null);
+
+        StreamingResponseBody stream = chatController.chatStream(user,
+                new ChatRequest("I feel calmer.")).getBody();
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        assertNotNull(stream);
+        stream.writeTo(output);
+
+        String events = output.toString(StandardCharsets.UTF_8);
+        assertTrue(events.contains("event: response\ndata: {\"delta\":\"That sounds \"}"));
+        assertTrue(events.contains("event: response\ndata: {\"delta\":\"like a welcome change.\"}"));
+        assertEquals(1, events.split("event: complete", -1).length - 1);
+        assertTrue(events.contains("That sounds like a welcome change."));
+        verify(conversationRepository).save(any(Conversation.class));
+        verify(emotionAnalysisService).saveAnalysis(any(), eq(analysis));
     }
 
     @Test
@@ -255,7 +292,7 @@ class ChatControllerTest {
         when(aiAnalysisService.analyzeVoice(any(), any(), any(), any(), any(), any())).thenReturn(analysis);
         when(conversationRepository.save(any(Conversation.class))).thenAnswer(inv -> inv.getArgument(0));
         when(emotionAnalysisService.saveAnalysis(any(), eq(analysis))).thenReturn(null);
-        when(chatResponseService.generateResponse(1L, "I feel tired today.", analysis))
+        when(chatResponseService.generateResponseStream(eq(1L), eq("I feel tired today."), eq(analysis), isNull(), any()))
                 .thenThrow(new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
                         "The response service is temporarily unavailable.", "OLLAMA_UNAVAILABLE"));
 

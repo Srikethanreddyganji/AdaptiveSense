@@ -26,14 +26,14 @@ class UserMemoryServiceTest {
     void memoryUpdateUsesLocalProviderAndPersistsReturnedContent() {
         UserMemoryService memoryService = new UserMemoryService(userMemoryRepository, ollamaProvider);
         when(userMemoryRepository.findByUserId(5L)).thenReturn(Optional.empty());
-        when(ollamaProvider.chat(anyList(), isNull())).thenReturn("Prefers short check-ins.");
+        when(ollamaProvider.chatBackground(anyList())).thenReturn("Prefers short check-ins.");
         when(userMemoryRepository.save(any(UserMemory.class))).thenAnswer(call -> call.getArgument(0));
 
         memoryService.updateMemoryAsync(5L, "I prefer short check-ins");
 
         ArgumentCaptor<UserMemory> saved = ArgumentCaptor.forClass(UserMemory.class);
         verify(userMemoryRepository).save(saved.capture());
-        verify(ollamaProvider).chat(anyList(), isNull());
+        verify(ollamaProvider).chatBackground(anyList());
         org.junit.jupiter.api.Assertions.assertEquals("Prefers short check-ins.", saved.getValue().getMemory());
     }
 
@@ -41,10 +41,20 @@ class UserMemoryServiceTest {
     void localModelFailureDoesNotEscapeOrWriteMemory() {
         UserMemoryService memoryService = new UserMemoryService(userMemoryRepository, ollamaProvider);
         when(userMemoryRepository.findByUserId(5L)).thenReturn(Optional.empty());
-        when(ollamaProvider.chat(anyList(), isNull())).thenThrow(new ApiException(
+        when(ollamaProvider.chatBackground(anyList())).thenThrow(new ApiException(
                 HttpStatus.SERVICE_UNAVAILABLE, "Local model unavailable", "OLLAMA_UNAVAILABLE"));
 
         assertDoesNotThrow(() -> memoryService.updateMemoryAsync(5L, "Private message"));
+        verify(userMemoryRepository, never()).save(any(UserMemory.class));
+    }
+
+    @Test
+    void memoryUpdateIsSkippedWhenForegroundModelWorkOwnsTheProvider() {
+        UserMemoryService memoryService = new UserMemoryService(userMemoryRepository, ollamaProvider);
+        when(userMemoryRepository.findByUserId(5L)).thenReturn(Optional.empty());
+        when(ollamaProvider.chatBackground(anyList())).thenReturn(null);
+
+        assertDoesNotThrow(() -> memoryService.updateMemoryAsync(5L, "I prefer short check-ins"));
         verify(userMemoryRepository, never()).save(any(UserMemory.class));
     }
 }

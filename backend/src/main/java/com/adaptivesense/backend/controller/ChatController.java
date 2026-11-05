@@ -154,6 +154,64 @@ public class ChatController {
         );
     }
 
+    /** Backward-compatible streaming endpoint; the existing JSON endpoint is unchanged. */
+    @PostMapping(value = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public ResponseEntity<StreamingResponseBody> chatStream(
+            @AuthenticationPrincipal AuthenticatedUser user,
+            @Valid @RequestBody ChatRequest request) {
+        String requestId = currentRequestId();
+        StreamingResponseBody stream = output -> {
+            try {
+                writeSse(output, "progress", Map.of("stage", "accepted"));
+                Long userId = user.getUserId();
+                String message = request.getMessage();
+                List<Map<String, String>> conversationContext = buildConversationContext(userId);
+                Map<String, Object> previousEmotion = buildPreviousEmotion(userId);
+                Map<String, Object> aiAnalysis = requestId == null
+                        ? aiAnalysisService.analyze(message, conversationContext, previousEmotion)
+                        : aiAnalysisService.analyze(message, conversationContext, previousEmotion, requestId);
+                writeSse(output, "progress", Map.of("stage", "generating_response"));
+                String response = chatResponseService.generateResponseStream(userId, message, aiAnalysis,
+                        requestId, delta -> writeSse(output, "response", Map.of("delta", delta)));
+
+                Conversation conversation = conversationRepository.save(new Conversation(userId, message, response));
+                EmotionAnalysis analysis = emotionAnalysisService.saveAnalysis(conversation.getId(), aiAnalysis);
+                scheduleMemoryUpdate(userId, message);
+                boolean safetyEscalation = analysis != null
+                        && "Elevated".equalsIgnoreCase(analysis.getRiskLevel());
+                writeSse(output, "complete", Map.of(
+                        "response", response,
+                        "emotion", analysis != null ? analysis.getEmotion() : "Unknown",
+                        "distressLevel", analysis != null ? analysis.getDistressLevel() : "Unknown",
+                        "riskLevel", analysis != null ? analysis.getRiskLevel() : "Unknown",
+                        "confidence", analysis != null ? analysis.getConfidence() : 0.0,
+                        "safetyEscalation", safetyEscalation));
+            } catch (SseClientDisconnectedException exception) {
+                log.debug("Text chat SSE client disconnected request_id={}",
+                        requestId == null ? "unavailable" : requestId);
+            } catch (Exception exception) {
+                String errorMessage = exception instanceof ApiException apiException
+                        ? apiException.getMessage() : "Chat processing failed. Please try again.";
+                String code = exception instanceof ApiException apiException
+                        ? apiException.getCode() : "CHAT_PROCESSING_FAILURE";
+                log.error("Text chat SSE failed request_id={} category={} exception={}",
+                        requestId == null ? "unavailable" : requestId,
+                        code, exception.getClass().getSimpleName());
+                try {
+                    writeSse(output, "error", Map.of("code", code, "message", errorMessage));
+                } catch (Exception writeException) {
+                    log.debug("Unable to write text chat SSE error event ({}).",
+                            writeException.getClass().getSimpleName());
+                }
+            }
+        };
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-cache, no-transform")
+                .header("X-Accel-Buffering", "no")
+                .contentType(MediaType.TEXT_EVENT_STREAM)
+                .body(stream);
+    }
+
     @PostMapping(value = "/voice", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ResponseEntity<Map<String, Object>> voiceChat(
             @AuthenticationPrincipal AuthenticatedUser user,
@@ -162,7 +220,7 @@ public class ChatController {
             @RequestParam(value = "conversationId", required = false) Long conversationId) {
 
         return ResponseEntity.ok(processVoiceChat(user, audio, clientTranscript, conversationId,
-                currentRequestId(), stage -> {}, analysis -> {}));
+                currentRequestId(), stage -> {}, analysis -> {}, delta -> {}));
     }
 
     @PostMapping(value = "/voice/stream", consumes = MediaType.MULTIPART_FORM_DATA_VALUE,
@@ -208,11 +266,10 @@ public class ChatController {
                             streamStage.set(stage);
                             writeSse(output, "progress", Map.of("stage", stage));
                         },
-                        analysis -> writeSse(output, "analysis", analysis)
+                        analysis -> writeSse(output, "analysis", analysis),
+                        delta -> writeSse(output, "response", Map.of("delta", delta))
                 );
-                writeSse(output, "response", Map.of("response", result.getOrDefault("response", "")));
                 Map<String, Object> completion = new LinkedHashMap<>(result);
-                completion.remove("response");
                 writeSse(output, "complete", completion);
                 completionSent.set(true);
             } catch (SseClientDisconnectedException exception) {
@@ -291,7 +348,8 @@ public class ChatController {
             Long conversationId,
             String requestId,
             java.util.function.Consumer<String> onStage,
-            java.util.function.Consumer<Map<String, Object>> onAnalysis) {
+            java.util.function.Consumer<Map<String, Object>> onAnalysis,
+            java.util.function.Consumer<String> onResponseDelta) {
         long requestStarted = System.nanoTime();
         Long userId = user.getUserId();
 
@@ -355,9 +413,8 @@ public class ChatController {
 
         onStage.accept("response");
         long responseStarted = System.nanoTime();
-        String response = requestId == null
-                ? chatResponseService.generateResponse(userId, transcribedText, aiAnalysis)
-                : chatResponseService.generateResponse(userId, transcribedText, aiAnalysis, requestId);
+        String response = chatResponseService.generateResponseStream(
+                userId, transcribedText, aiAnalysis, requestId, onResponseDelta);
         long responseGenerationMs = elapsedMs(responseStarted);
 
         long persistenceStarted = System.nanoTime();

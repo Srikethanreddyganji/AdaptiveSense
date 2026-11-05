@@ -27,6 +27,7 @@ function VoiceConversation() {
     const [loading, setLoading] = useState(false);
     const [processingStage, setProcessingStage] = useState("");
     const [processingTimings, setProcessingTimings] = useState(null);
+    const speechPlaybackStartedRef = useRef(null);
     const [recording, setRecording] = useState(false);
     const [starting, setStarting] = useState(false);
     const [isMuted, setIsMuted] = useState(false);
@@ -549,9 +550,24 @@ function VoiceConversation() {
         speech.rate = 0.95;
         speech.pitch = 1;
 
-        speech.onstart = () => setSpeaking(true);
-        speech.onend = () => setSpeaking(false);
-        speech.onerror = () => setSpeaking(false);
+        speech.onstart = () => {
+            speechPlaybackStartedRef.current = performance.now();
+            setSpeaking(true);
+        };
+        speech.onend = () => {
+            if (speechPlaybackStartedRef.current != null) {
+                const speechPlaybackMs = Math.round(performance.now() - speechPlaybackStartedRef.current);
+                setProcessingTimings((previous) => previous
+                    ? { ...previous, speechPlaybackMs }
+                    : previous);
+                speechPlaybackStartedRef.current = null;
+            }
+            setSpeaking(false);
+        };
+        speech.onerror = () => {
+            speechPlaybackStartedRef.current = null;
+            setSpeaking(false);
+        };
 
         window.speechSynthesis.speak(speech);
     };
@@ -644,10 +660,13 @@ function VoiceConversation() {
                 setVoiceEmotion(payload.voiceEmotion || null);
                 setAnalysisWarnings(Array.isArray(payload.analysisWarnings) ? payload.analysisWarnings : []);
                 setProcessingTimings(payload.processingTimingsMs
-                    ? { ...payload.processingTimingsMs, clientRequestToStreamHeadersMs: uploadMs }
+                    ? (previous) => ({ ...previous, ...payload.processingTimingsMs,
+                        clientRequestToStreamHeadersMs: uploadMs })
                     : null);
             };
             let responseEventReceived = false;
+            let streamedResponse = "";
+            let firstResponseDeltaMeasured = false;
 
             await consumeVoiceSse(streamResponse, (eventName, payload) => {
                 if (eventName === "progress") {
@@ -656,15 +675,29 @@ function VoiceConversation() {
                     applyAnalysis(payload);
                 } else if (eventName === "response") {
                     responseEventReceived = true;
-                    const aiResponse = payload.response || "";
-                    setResponse(aiResponse);
-                    if (aiResponse && !isMutedRef.current) speakResponse(aiResponse);
+                    if (!firstResponseDeltaMeasured) {
+                        firstResponseDeltaMeasured = true;
+                        const firstResponseDeltaMs = Math.round(performance.now() - uploadStarted);
+                        setProcessingTimings((previous) => previous
+                            ? { ...previous, firstResponseDeltaMs }
+                            : { firstResponseDeltaMs });
+                    }
+                    const delta = payload.delta ?? payload.response ?? "";
+                    if (payload.delta != null) {
+                        streamedResponse += String(delta);
+                        setResponse(streamedResponse);
+                    } else if (delta) {
+                        streamedResponse = String(delta);
+                        setResponse(streamedResponse);
+                    }
                 } else if (eventName === "complete") {
                     applyAnalysis(payload);
-                    const aiResponse = payload.response || "";
-                    if (!responseEventReceived && aiResponse) {
+                    const aiResponse = payload.response || streamedResponse;
+                    if (aiResponse) {
                         setResponse(aiResponse);
-                        if (!isMutedRef.current) speakResponse(aiResponse);
+                        if (!responseEventReceived || streamedResponse) {
+                            if (!isMutedRef.current) speakResponse(aiResponse);
+                        }
                     }
                     if (payload.responseError) {
                         setError(voiceHttpErrorMessage(
@@ -1142,6 +1175,10 @@ function VoiceConversation() {
                                 <p className="processing-timing">
                                     Measured: total {(processingTimings.total / 1000).toFixed(1)}s ·
                                     Local AI {(processingTimings.responseGeneration / 1000).toFixed(1)}s ·
+                                    {processingTimings.firstResponseDeltaMs != null
+                                        && <>first text {(processingTimings.firstResponseDeltaMs / 1000).toFixed(1)}s ·</>}
+                                    {processingTimings.speechPlaybackMs != null
+                                        && <>speech {(processingTimings.speechPlaybackMs / 1000).toFixed(1)}s ·</>}
                                     transcription {(processingTimings.aiPipeline?.transcription / 1000).toFixed(1)}s ·
                                     voice analysis {(processingTimings.aiPipeline?.voice_analysis / 1000).toFixed(1)}s ·
                                     model load {(processingTimings.aiPipeline?.voice_analysis_stages?.model_load / 1000).toFixed(1)}s ·

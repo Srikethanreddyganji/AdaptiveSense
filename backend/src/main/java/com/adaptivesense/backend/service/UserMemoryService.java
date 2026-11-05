@@ -43,10 +43,14 @@ public class UserMemoryService {
             String prompt = "Existing memory:\n" + (currentMemory == null ? "" : currentMemory)
                     + "\n\nLatest user message:\n" + (userMessage == null ? "" : userMessage)
                     + "\n\nReturn the concise updated memory only.";
-            String updatedMemory = ollamaProvider.chat(List.of(
+            String updatedMemory = ollamaProvider.chatBackground(List.of(
                     Map.of("role", "system", "content", system),
                     Map.of("role", "user", "content", prompt)
-            ), null);
+            ));
+            if (updatedMemory == null) {
+                log.debug("Optional local memory update deferred while foreground generation is active.");
+                return;
+            }
             if (updatedMemory == null || updatedMemory.isBlank()) {
                 log.debug("Local memory model returned no update.");
                 return;

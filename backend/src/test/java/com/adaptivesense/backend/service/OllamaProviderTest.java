@@ -32,7 +32,8 @@ class OllamaProviderTest {
         ReflectionTestUtils.setField(provider, "model", "qwen2.5:3b");
         ReflectionTestUtils.setField(provider, "numCtx", 4096);
         ReflectionTestUtils.setField(provider, "numPredict", 220);
-        ReflectionTestUtils.setField(provider, "keepAlive", "5m");
+        ReflectionTestUtils.setField(provider, "keepAlive", "30m");
+        ReflectionTestUtils.setField(provider, "numThread", 4);
         ReflectionTestUtils.setField(provider, "queueTimeout", Duration.ofMillis(25));
     }
 
@@ -41,8 +42,8 @@ class OllamaProviderTest {
         server.expect(requestTo("http://127.0.0.1:11434/api/chat"))
                 .andExpect(method(org.springframework.http.HttpMethod.POST))
                 .andExpect(content().json("""
-                        {"model":"qwen2.5:3b","stream":false,"keep_alive":"5m",
-                         "options":{"num_ctx":4096,"num_predict":220},
+                        {"model":"qwen2.5:3b","stream":false,"keep_alive":"30m",
+                         "options":{"num_ctx":4096,"num_predict":220,"num_thread":4},
                          "messages":[{"role":"user","content":"Hello"}]}
                         """))
                 .andRespond(withSuccess("""
@@ -50,6 +51,21 @@ class OllamaProviderTest {
                         """, org.springframework.http.MediaType.APPLICATION_JSON));
 
         assertEquals("I hear you.", provider.chat(List.of(Map.of("role", "user", "content", "Hello")), "req-1"));
+        server.verify();
+    }
+
+    @Test
+    void letsOllamaChooseCpuThreadsWhenNoOverrideIsConfigured() {
+        ReflectionTestUtils.setField(provider, "numThread", 0);
+        server.expect(requestTo("http://127.0.0.1:11434/api/chat"))
+                .andExpect(content().json("""
+                        {"options":{"num_ctx":4096,"num_predict":220}}
+                        """, false))
+                .andRespond(withSuccess("""
+                        {"message":{"content":"The response is complete."},"done":true}
+                        """, org.springframework.http.MediaType.APPLICATION_JSON));
+        assertEquals("The response is complete.", provider.chat(
+                List.of(Map.of("role", "user", "content", "Hello")), "req-default-threads"));
         server.verify();
     }
 
@@ -123,6 +139,50 @@ class OllamaProviderTest {
         ApiException error = assertThrows(ApiException.class,
                 () -> provider.chat(List.of(Map.of("role", "user", "content", "Hello")), "req-8"));
         assertEquals("OLLAMA_RESPONSE_INVALID", error.getCode());
+        server.verify();
+    }
+
+    @Test
+    void streamsNdjsonDeltasImmediatelyAndReturnsTheCompleteResponse() {
+        server.expect(requestTo("http://127.0.0.1:11434/api/chat"))
+                .andExpect(content().json("""
+                        {"model":"qwen2.5:3b","stream":true,"keep_alive":"30m",
+                         "options":{"num_ctx":4096,"num_predict":220,"num_thread":4}}
+                        """, false))
+                .andRespond(withSuccess("""
+                        {"message":{"role":"assistant","content":"Hello"},"done":false}
+                        {"message":{"role":"assistant","content":" there."},"done":false}
+                        {"message":{"role":"assistant","content":""},"done":true}
+                        """, org.springframework.http.MediaType.parseMediaType("application/x-ndjson")));
+
+        java.util.List<String> deltas = new java.util.ArrayList<>();
+        String answer = provider.chatStream(
+                List.of(Map.of("role", "user", "content", "Hello")), "req-stream", deltas::add);
+        assertEquals(List.of("Hello", " there."), deltas);
+        assertEquals("Hello there.", answer);
+        server.verify();
+    }
+
+    @Test
+    void streamProviderErrorIsSafeAndDoesNotReturnPartialTextAsSuccess() {
+        server.expect(requestTo("http://127.0.0.1:11434/api/chat"))
+                .andRespond(withSuccess("{\"error\":\"model qwen2.5:3b not found\"}\n",
+                        org.springframework.http.MediaType.parseMediaType("application/x-ndjson")));
+        ApiException error = assertThrows(ApiException.class, () -> provider.chatStream(
+                List.of(Map.of("role", "user", "content", "Hello")), "req-stream-error", ignored -> {}));
+        assertEquals("OLLAMA_MODEL_NOT_FOUND", error.getCode());
+        assertFalse(error.getMessage().contains("qwen2.5:3b"));
+        server.verify();
+    }
+
+    @Test
+    void prematureStreamEndDoesNotBecomeACompleteResponse() {
+        server.expect(requestTo("http://127.0.0.1:11434/api/chat"))
+                .andRespond(withSuccess("{\"message\":{\"content\":\"partial\"},\"done\":false}\n",
+                        org.springframework.http.MediaType.parseMediaType("application/x-ndjson")));
+        ApiException error = assertThrows(ApiException.class, () -> provider.chatStream(
+                List.of(Map.of("role", "user", "content", "Hello")), "req-stream-ended", ignored -> {}));
+        assertEquals("OLLAMA_STREAM_INTERRUPTED", error.getCode());
         server.verify();
     }
 }

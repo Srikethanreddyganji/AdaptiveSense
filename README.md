@@ -46,7 +46,8 @@ Copy `.env.example` for the backend values and `frontend/.env.example` for the f
 | `OLLAMA_MODEL` | Backend | Local model tag (default `qwen2.5:3b`). |
 | `OLLAMA_CONNECT_TIMEOUT`, `OLLAMA_READ_TIMEOUT` | Backend | Ollama connection/read timeouts (defaults `5s` and `180s`). |
 | `OLLAMA_NUM_CTX`, `OLLAMA_NUM_PREDICT` | Backend | Bounded prompt context and generated token count (defaults `4096` and `220`). |
-| `OLLAMA_KEEP_ALIVE` | Backend | How long Ollama keeps the model resident after a request (default `5m`). |
+| `OLLAMA_NUM_THREAD` | Backend | Optional CPU thread override; `0` omits the option and lets Ollama choose (default `0`). |
+| `OLLAMA_KEEP_ALIVE` | Backend | How long Ollama keeps the model resident after a request (default `30m`). |
 | `OLLAMA_REQUEST_QUEUE_TIMEOUT` | Backend | Maximum wait for the single in-process generation permit (default `90s`). |
 | `AI_SERVICE_URL` | Backend | Base URL of FastAPI (default `http://localhost:8000`). |
 | `AI_SERVICE_INTERNAL_KEY` | Backend and AI service | Shared secret for backend-to-AI requests; required when `ENVIRONMENT=production`. |
@@ -95,7 +96,7 @@ ollama pull qwen2.5:3b
 Invoke-RestMethod http://127.0.0.1:11434/api/tags
 ```
 
-The backend sends `stream=false` requests and asks Ollama to retain Qwen for five minutes. Generation is serialized in the backend to avoid multiple concurrent model inferences on low-memory machines. For a dedicated Ollama host, set `OLLAMA_MAX_LOADED_MODELS=1` and `OLLAMA_NUM_PARALLEL=1` in the Ollama process environment before starting it; AdaptiveSense does not start or restart Ollama.
+The backend sends streamed requests and asks Ollama to retain Qwen for 30 minutes. Generation is serialized in the backend to avoid multiple concurrent model inferences on low-memory machines. For a dedicated Ollama host, set `OLLAMA_MAX_LOADED_MODELS=1` and `OLLAMA_NUM_PARALLEL=1` in the Ollama process environment before starting it; AdaptiveSense does not start or restart Ollama. Leave `OLLAMA_NUM_THREAD=0` unless benchmarking on the target machine: a matched local run here measured 6.98 tokens/sec with Ollama's default and 6.80 with four threads, while the separately supplied benchmark favored four threads.
 
 ### 3. Spring Boot backend
 
