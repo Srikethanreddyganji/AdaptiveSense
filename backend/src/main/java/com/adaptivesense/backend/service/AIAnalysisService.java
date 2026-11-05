@@ -88,6 +88,14 @@ public class AIAnalysisService {
             String currentMessage,
             Object previousConversation,
             Object previousEmotion) {
+        return analyze(currentMessage, previousConversation, previousEmotion, null);
+    }
+
+    public Map<String, Object> analyze(
+            String currentMessage,
+            Object previousConversation,
+            Object previousEmotion,
+            String requestId) {
 
         checkInternalKeySecurity();
 
@@ -112,7 +120,8 @@ public class AIAnalysisService {
         String targetUrl = baseUrl + "/analyze";
 
         try {
-            log.info("Sending NLP analysis request to: {}", targetUrl);
+            log.info("Sending NLP analysis request request_id={} to: {}",
+                    requestId == null ? "unavailable" : requestId, targetUrl);
 
             RestClient.RequestBodySpec spec =
                     restClient
@@ -123,6 +132,9 @@ public class AIAnalysisService {
 
             if (internalKey != null && !internalKey.isBlank()) {
                 spec = spec.header("X-Internal-Key", internalKey);
+            }
+            if (requestId != null && !requestId.isBlank()) {
+                spec = spec.header("X-Request-ID", requestId);
             }
 
             Map<String, Object> response =
@@ -136,11 +148,14 @@ public class AIAnalysisService {
                 return emptyAnalysis();
             }
 
-            log.info("AI RESPONSE RECEIVED SUCCESSFULLY from {}", targetUrl);
+            log.info("AI NLP analysis completed request_id={} from {}",
+                    requestId == null ? "unavailable" : requestId, targetUrl);
             return response;
 
         } catch (Exception e) {
-            log.error("AI analysis service request failed at {} ({})", targetUrl, e.getClass().getSimpleName());
+            log.error("AI analysis service request failed request_id={} at {} ({})",
+                    requestId == null ? "unavailable" : requestId,
+                    targetUrl, e.getClass().getSimpleName());
             return emptyAnalysis();
         }
     }

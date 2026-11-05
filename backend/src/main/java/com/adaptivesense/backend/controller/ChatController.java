@@ -8,7 +8,7 @@ import com.adaptivesense.backend.repository.ConversationRepository;
 import com.adaptivesense.backend.security.AuthenticatedUser;
 import com.adaptivesense.backend.service.AIAnalysisService;
 import com.adaptivesense.backend.service.EmotionAnalysisService;
-import com.adaptivesense.backend.service.GeminiService;
+import com.adaptivesense.backend.service.ChatResponseService;
 import com.adaptivesense.backend.service.UserMemoryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -50,14 +50,14 @@ public class ChatController {
     private long maxAudioSizeBytes = 10L * 1024 * 1024;
 
     private final ConversationRepository conversationRepository;
-    private final GeminiService geminiService;
+    private final ChatResponseService chatResponseService;
     private final EmotionAnalysisService emotionAnalysisService;
     private final UserMemoryService userMemoryService;
     private final AIAnalysisService aiAnalysisService;
 
     public ChatController(
             ConversationRepository conversationRepository,
-            GeminiService geminiService,
+            ChatResponseService chatResponseService,
             EmotionAnalysisService emotionAnalysisService,
             UserMemoryService userMemoryService,
             AIAnalysisService aiAnalysisService) {
@@ -65,8 +65,8 @@ public class ChatController {
         this.conversationRepository =
                 conversationRepository;
 
-        this.geminiService =
-                geminiService;
+        this.chatResponseService =
+                chatResponseService;
 
         this.emotionAnalysisService =
                 emotionAnalysisService;
@@ -85,6 +85,7 @@ public class ChatController {
 
         Long userId = user.getUserId();
         String message = request.getMessage();
+        String requestId = currentRequestId();
 
         List<Map<String, String>> conversationContext =
                 buildConversationContext(userId);
@@ -92,19 +93,13 @@ public class ChatController {
         Map<String, Object> previousEmotion =
                 buildPreviousEmotion(userId);
 
-        Map<String, Object> aiAnalysis =
-                aiAnalysisService.analyze(
-                        message,
-                        conversationContext,
-                        previousEmotion
-                );
+        Map<String, Object> aiAnalysis = requestId == null
+                ? aiAnalysisService.analyze(message, conversationContext, previousEmotion)
+                : aiAnalysisService.analyze(message, conversationContext, previousEmotion, requestId);
 
-        String response =
-                geminiService.generateResponse(
-                        userId,
-                        message,
-                        aiAnalysis
-                );
+        String response = requestId == null
+                ? chatResponseService.generateResponse(userId, message, aiAnalysis)
+                : chatResponseService.generateResponse(userId, message, aiAnalysis, requestId);
 
         Conversation conversation =
                 new Conversation(
@@ -342,7 +337,7 @@ public class ChatController {
             throw new ApiException(HttpStatus.UNPROCESSABLE_ENTITY, "Could not transcribe speech from audio recording");
         }
 
-        // Persist and stream completed analysis before contacting Gemini so a
+        // Persist and stream completed analysis before contacting the local model so a
         // provider outage cannot discard the real transcript/acoustic results.
         Conversation conversation = conversationRepository.save(
                 new Conversation(userId, transcribedText, null));
@@ -352,16 +347,18 @@ public class ChatController {
         analysisEvent.put("conversationId", conversation.getId());
         analysisEvent.put("acousticFeatures", aiAnalysis.getOrDefault("acoustic_features", Map.of()));
         analysisEvent.put("voiceEmotion", aiAnalysis.getOrDefault("voice_emotion", Map.of()));
+        analysisEvent.put("analysisStatus", aiAnalysis.getOrDefault("analysis_status", "unknown"));
+        analysisEvent.put("analysisWarnings", aiAnalysis.getOrDefault("analysis_warnings", List.of()));
         analysisEvent.put("processingTimingsMs", Map.of("aiServiceRoundTrip", aiServiceMs,
                 "aiPipeline", aiAnalysis.getOrDefault("timings_ms", Map.of())));
         onAnalysis.accept(analysisEvent);
 
         onStage.accept("response");
-        long geminiStarted = System.nanoTime();
+        long responseStarted = System.nanoTime();
         String response = requestId == null
-                ? geminiService.generateResponse(userId, transcribedText, aiAnalysis)
-                : geminiService.generateResponse(userId, transcribedText, aiAnalysis, requestId);
-        long geminiMs = elapsedMs(geminiStarted);
+                ? chatResponseService.generateResponse(userId, transcribedText, aiAnalysis)
+                : chatResponseService.generateResponse(userId, transcribedText, aiAnalysis, requestId);
+        long responseGenerationMs = elapsedMs(responseStarted);
 
         long persistenceStarted = System.nanoTime();
         conversation.setAssistantResponse(response);
@@ -380,19 +377,21 @@ public class ChatController {
         body.put("safetyEscalation", analysis != null && "Elevated".equalsIgnoreCase(analysis.getRiskLevel()));
         body.put("acousticFeatures", aiAnalysis.getOrDefault("acoustic_features", Map.of()));
         body.put("voiceEmotion", aiAnalysis.getOrDefault("voice_emotion", Map.of()));
+        body.put("analysisStatus", aiAnalysis.getOrDefault("analysis_status", "unknown"));
+        body.put("analysisWarnings", aiAnalysis.getOrDefault("analysis_warnings", List.of()));
         body.put("inputMode", "voice");
 
         Map<String, Object> timings = new LinkedHashMap<>();
         timings.put("aiServiceRoundTrip", aiServiceMs);
         timings.put("aiPipeline", aiAnalysis.getOrDefault("timings_ms", Map.of()));
-        timings.put("gemini", geminiMs);
+        timings.put("responseGeneration", responseGenerationMs);
         timings.put("persistence", persistenceMs);
         timings.put("total", elapsedMs(requestStarted));
         body.put("processingTimingsMs", timings);
 
-        log.info("Voice request timings (request_id={}, ms): aiServiceRoundTrip={}, gemini={}, persistence={}, total={}",
+        log.info("Voice request timings (request_id={}, ms): aiServiceRoundTrip={}, responseGeneration={}, persistence={}, total={}",
                 requestId == null ? "unavailable" : requestId,
-                aiServiceMs, geminiMs, persistenceMs, timings.get("total"));
+                aiServiceMs, responseGenerationMs, persistenceMs, timings.get("total"));
         return body;
     }
 
@@ -400,11 +399,9 @@ public class ChatController {
         if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attributes)) {
             return null;
         }
-        String candidate = attributes.getRequest().getHeader("X-Request-ID");
-        if (candidate == null || !candidate.matches("[A-Za-z0-9_-]{1,80}")) {
-            return java.util.UUID.randomUUID().toString();
-        }
-        return candidate;
+        Object requestId = attributes.getRequest().getAttribute(
+                com.adaptivesense.backend.security.ChatRequestCorrelationFilter.REQUEST_ID_ATTRIBUTE);
+        return requestId instanceof String value ? value : null;
     }
 
     private static long elapsedMs(long startedAtNanos) {

@@ -1,6 +1,7 @@
 import os
 import torch
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
+from services.runtime_config import configure_torch_threads
 
 EMOTION_LABELS = ["anger", "disgust", "fear", "joy", "neutral", "sadness", "surprise"]
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -12,7 +13,7 @@ class NLPService:
 
     def __init__(self):
         print("Configuring single-thread execution for minimal memory footprint...")
-        torch.set_num_threads(1)
+        configure_torch_threads(torch)
 
         self.tokenizer = None
         self.model = None

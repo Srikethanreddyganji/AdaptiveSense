@@ -5,6 +5,7 @@ import time
 
 import numpy as np
 import torch
+from services.runtime_config import configure_torch_threads
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class TranscriptionService:
             "openai/whisper-tiny"
         )
         self.local_files_only = os.getenv(
-            "WHISPER_LOCAL_FILES_ONLY", "false"
+            "WHISPER_LOCAL_FILES_ONLY", "true"
         ).strip().lower() in {"1", "true", "yes", "on"}
 
     def _load_pipeline(self):
@@ -50,16 +51,19 @@ class TranscriptionService:
         try:
             from transformers import pipeline
 
-            torch.set_num_threads(1)
+            configure_torch_threads(torch)
             pipeline_options = {
                 "model_kwargs": {
                     "low_cpu_mem_usage": True,
-                    "local_files_only": self.local_files_only,
                 },
             }
             if self.local_files_only:
                 from transformers import AutoFeatureExtractor, AutoTokenizer
 
+                # `local_files_only` is a pipeline/Hub option in the installed
+                # Transformers version. Nesting it in model_kwargs passes it a
+                # second time to AutoConfig and raises TypeError.
+                pipeline_options["local_files_only"] = True
                 pipeline_options["tokenizer"] = AutoTokenizer.from_pretrained(
                     self.model_id, local_files_only=True
                 )

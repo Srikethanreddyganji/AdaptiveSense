@@ -8,7 +8,7 @@ import com.adaptivesense.backend.repository.ConversationRepository;
 import com.adaptivesense.backend.security.AuthenticatedUser;
 import com.adaptivesense.backend.service.AIAnalysisService;
 import com.adaptivesense.backend.service.EmotionAnalysisService;
-import com.adaptivesense.backend.service.GeminiService;
+import com.adaptivesense.backend.service.ChatResponseService;
 import com.adaptivesense.backend.service.UserMemoryService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -48,7 +48,7 @@ class ChatControllerTest {
     private ConversationRepository conversationRepository;
 
     @Mock
-    private GeminiService geminiService;
+    private ChatResponseService chatResponseService;
 
     @Mock
     private EmotionAnalysisService emotionAnalysisService;
@@ -70,7 +70,7 @@ class ChatControllerTest {
     }
 
     @Test
-    void voiceChat_geminiFallbackAndMemoryQueueRejectionPreserveVoiceAnalysis() {
+    void voiceChat_localResponseAndMemoryQueueRejectionPreserveVoiceAnalysis() {
         MockMultipartFile audio = new MockMultipartFile(
                 "audio",
                 "recording.webm",
@@ -98,8 +98,8 @@ class ChatControllerTest {
         when(aiAnalysisService.analyzeVoice(any(), any(), any(), any(), any(), any()))
                 .thenReturn(mockAiResult);
 
-        when(geminiService.generateResponse(eq(1L), eq("I felt overwhelmed today but I am holding on."), eq(mockAiResult)))
-                .thenReturn("I'm having trouble generating a response right now. Please try again.");
+        when(chatResponseService.generateResponse(eq(1L), eq("I felt overwhelmed today but I am holding on."), eq(mockAiResult)))
+                .thenReturn("I hear that it has been a difficult day. What feels most important right now?");
 
         when(conversationRepository.save(any(Conversation.class)))
                 .thenAnswer(inv -> inv.getArgument(0));
@@ -121,7 +121,7 @@ class ChatControllerTest {
 
         Map<String, Object> body = response.getBody();
         assertNotNull(body);
-        assertEquals("I'm having trouble generating a response right now. Please try again.", body.get("response"));
+        assertEquals("I hear that it has been a difficult day. What feels most important right now?", body.get("response"));
         assertEquals("I felt overwhelmed today but I am holding on.", body.get("transcript"));
         assertEquals("Sadness", body.get("emotion"));
         assertEquals("Moderate", body.get("distressLevel"));
@@ -150,7 +150,7 @@ class ChatControllerTest {
         );
         when(conversationRepository.findTop10ByUserIdOrderByCreatedAtDesc(1L)).thenReturn(List.of());
         when(aiAnalysisService.analyzeVoice(any(), any(), any(), any(), any(), any())).thenReturn(analysis);
-        when(geminiService.generateResponse(1L, "I feel ready to talk.", analysis)).thenReturn("I am listening.");
+        when(chatResponseService.generateResponse(1L, "I feel ready to talk.", analysis)).thenReturn("I am listening.");
         when(conversationRepository.save(any(Conversation.class))).thenAnswer(inv -> inv.getArgument(0));
         when(emotionAnalysisService.saveAnalysis(any(), eq(analysis))).thenReturn(null);
 
@@ -211,7 +211,7 @@ class ChatControllerTest {
         assertNotNull(stream);
         assertDoesNotThrow(() -> stream.writeTo(disconnectOnComplete));
         assertTrue(committedBytes.toString(StandardCharsets.UTF_8).contains("event: progress"));
-        verify(conversationRepository).save(any(Conversation.class));
+        verify(conversationRepository, times(1)).save(any(Conversation.class));
     }
 
     @Test
@@ -239,7 +239,7 @@ class ChatControllerTest {
     }
 
     @Test
-    void voiceAnalysisEventAndPersistenceSurviveGeminiUnavailable() throws Exception {
+    void voiceAnalysisEventAndPersistenceSurviveLocalResponseUnavailable() throws Exception {
         ReflectionTestUtils.setField(chatController, "objectMapper", new ObjectMapper());
         MockMultipartFile audio = new MockMultipartFile(
                 "audio", "recording.webm", "audio/webm", new byte[]{1, 2, 3}
@@ -247,15 +247,17 @@ class ChatControllerTest {
         Map<String, Object> analysis = Map.of(
                 "text", "I feel tired today.",
                 "acoustic_features", Map.of("status", "ok", "mean_pitch_hz", 185.0),
-                "voice_emotion", Map.of("status", "ok", "label", "sadness")
+                "voice_emotion", Map.of("status", "ok", "label", "sadness"),
+                "analysis_status", "partial",
+                "analysis_warnings", List.of("VOICE_ANALYSIS_FAILURE")
         );
         when(conversationRepository.findTop10ByUserIdOrderByCreatedAtDesc(1L)).thenReturn(List.of());
         when(aiAnalysisService.analyzeVoice(any(), any(), any(), any(), any(), any())).thenReturn(analysis);
         when(conversationRepository.save(any(Conversation.class))).thenAnswer(inv -> inv.getArgument(0));
         when(emotionAnalysisService.saveAnalysis(any(), eq(analysis))).thenReturn(null);
-        when(geminiService.generateResponse(1L, "I feel tired today.", analysis))
+        when(chatResponseService.generateResponse(1L, "I feel tired today.", analysis))
                 .thenThrow(new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
-                        "The response service is temporarily unavailable.", "GEMINI_UNAVAILABLE"));
+                        "The response service is temporarily unavailable.", "OLLAMA_UNAVAILABLE"));
 
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         StreamingResponseBody stream = chatController
@@ -266,6 +268,7 @@ class ChatControllerTest {
         String events = output.toString(StandardCharsets.UTF_8);
         assertTrue(events.contains("event: analysis"));
         assertTrue(events.contains("mean_pitch_hz"));
+        assertTrue(events.contains("VOICE_ANALYSIS_FAILURE"));
         assertTrue(events.contains("event: error"));
         assertFalse(events.contains("event: complete"));
         verify(conversationRepository).save(any(Conversation.class));
@@ -359,7 +362,7 @@ class ChatControllerTest {
         when(aiAnalysisService.analyze(eq("Hello, I am feeling good today."), any(), any()))
                 .thenReturn(mockAiResult);
 
-        when(geminiService.generateResponse(eq(1L), eq("Hello, I am feeling good today."), eq(mockAiResult)))
+        when(chatResponseService.generateResponse(eq(1L), eq("Hello, I am feeling good today."), eq(mockAiResult)))
                 .thenReturn("Hello! It is wonderful to hear you are feeling good.");
 
         when(conversationRepository.save(any(Conversation.class)))

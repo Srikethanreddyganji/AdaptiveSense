@@ -138,6 +138,7 @@ public class SecurityConfig {
         );
 
         configuration.setAllowCredentials(true);
+        configuration.setExposedHeaders(List.of("X-Request-ID"));
 
         UrlBasedCorsConfigurationSource source =
                 new UrlBasedCorsConfigurationSource();

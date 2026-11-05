@@ -163,3 +163,63 @@ def test_voice_model_can_load_only_from_local_cache(monkeypatch):
     service._load_model()
 
     assert calls == {"extractor_local": True, "model_local": True}
+
+
+def test_voice_model_defaults_to_local_cache_only(monkeypatch):
+    monkeypatch.delenv("VOICE_EMOTION_LOCAL_FILES_ONLY", raising=False)
+    service = VoiceService()
+    assert service.local_files_only is True
+
+
+def test_missing_local_voice_model_returns_clear_unavailable_category(monkeypatch):
+    class MissingLocalAssets:
+        @classmethod
+        def from_pretrained(cls, _model_id, **kwargs):
+            assert kwargs.get("local_files_only") is True
+            raise OSError("model files missing")
+
+    monkeypatch.setenv("VOICE_EMOTION_LOCAL_FILES_ONLY", "true")
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        Wav2Vec2FeatureExtractor=MissingLocalAssets,
+        Wav2Vec2ForSequenceClassification=MissingLocalAssets,
+    ))
+    service = VoiceService()
+
+    service._load_model()
+
+    assert service._model is None
+    assert service._load_error == "voice_emotion_model_not_cached"
+
+
+def test_emotion_inference_batches_two_segments_and_aggregates_them():
+    import torch
+
+    class FakeExtractor:
+        def __call__(self, batch, **_kwargs):
+            return {"input_values": torch.tensor([[float(np.mean(part))] for part in batch])}
+
+    class FakeModel:
+        def __init__(self):
+            self.batch_sizes = []
+            self.inference_mode_seen = []
+
+        def __call__(self, input_values):
+            self.batch_sizes.append(input_values.shape[0])
+            self.inference_mode_seen.append(torch.is_inference_mode_enabled())
+            logits = torch.stack((input_values[:, 0], -input_values[:, 0]), dim=1)
+            return SimpleNamespace(logits=logits)
+
+    service = VoiceService()
+    service._model = FakeModel()
+    service._feature_extractor = FakeExtractor()
+    service._id2label = {0: "neu", 1: "hap"}
+    samples = create_sine_wave(220.0, 9.0)
+
+    result = service.analyze_emotion(samples, 16000)
+
+    assert service._model.batch_sizes == [2, 1]
+    assert all(service._model.inference_mode_seen)
+    assert result["status"] == "ok"
+    assert result["segment_count"] == 3
+    assert len(result["scores"]) == 2
+    assert sum(item["score"] for item in result["scores"]) == pytest.approx(1.0, abs=1e-4)

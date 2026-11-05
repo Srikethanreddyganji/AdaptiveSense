@@ -61,27 +61,92 @@ async def log_voice_request_lifecycle(request: Request, call_next):
     )
     request.state.voice_request_id = request_id
     started = time.perf_counter()
+    request.state.voice_metrics = {
+        "request_id": request_id,
+        "audio_duration_seconds": "unknown",
+        "audio_size_bytes": 0,
+        "transcription_source": "unknown",
+        "transcription_ms": 0.0,
+        "preprocessing_ms": 0.0,
+        "acoustic_analysis_ms": 0.0,
+        "model_load_ms": 0.0,
+        "transformers_import_ms": 0.0,
+        "feature_extractor_load_ms": 0.0,
+        "model_initialization_ms": 0.0,
+        "inference_ms": 0.0,
+        "voice_analysis_total_ms": 0.0,
+        "transcription_model_load_ms": 0.0,
+        "transcription_inference_ms": 0.0,
+        "decode_ms": 0.0,
+        "resample_ms": 0.0,
+        "upload_read_ms": 0.0,
+        "nlp_ms": 0.0,
+    }
     try:
         response = await call_next(request)
     except Exception as exc:
+        metrics = request.state.voice_metrics
         logger.error(
-            "voice_request_summary request_id=%s status=500 total_processing_ms=%.2f "
-            "content_length_bytes=%s failure=%s",
-            request_id, (time.perf_counter() - started) * 1000,
-            request.headers.get("content-length", "unknown"), type(exc).__name__,
+            "voice_request_summary request_id=%s status=500 audio_duration_seconds=%s "
+            "audio_size_bytes=%s transcription_source=%s upload_read_ms=%.2f "
+            "decode_ms=%.2f resample_ms=%.2f transcription_ms=%.2f "
+            "transcription_model_load_ms=%.2f transcription_inference_ms=%.2f "
+            "preprocessing_ms=%.2f acoustic_analysis_ms=%.2f model_load_ms=%.2f "
+            "transformers_import_ms=%.2f feature_extractor_load_ms=%.2f "
+            "model_initialization_ms=%.2f "
+            "inference_ms=%.2f voice_analysis_total_ms=%.2f nlp_ms=%.2f "
+            "total_processing_ms=%.2f failure=%s",
+            request_id, metrics["audio_duration_seconds"], metrics["audio_size_bytes"],
+            metrics["transcription_source"], metrics["upload_read_ms"], metrics["decode_ms"],
+            metrics["resample_ms"], metrics["transcription_ms"],
+            metrics["transcription_model_load_ms"], metrics["transcription_inference_ms"],
+            metrics["preprocessing_ms"], metrics["acoustic_analysis_ms"],
+            metrics["model_load_ms"], metrics["transformers_import_ms"],
+            metrics["feature_extractor_load_ms"],
+            metrics["model_initialization_ms"], metrics["inference_ms"],
+            metrics["voice_analysis_total_ms"], metrics["nlp_ms"],
+            (time.perf_counter() - started) * 1000, type(exc).__name__,
         )
         raise
 
+    metrics = request.state.voice_metrics
     logger.info(
-        "voice_request_summary request_id=%s status=%d total_processing_ms=%.2f "
-        "content_length_bytes=%s",
-        request_id, response.status_code, (time.perf_counter() - started) * 1000,
-        request.headers.get("content-length", "unknown"),
+        "voice_request_summary request_id=%s status=%d audio_duration_seconds=%s "
+        "audio_size_bytes=%s transcription_source=%s upload_read_ms=%.2f "
+        "decode_ms=%.2f resample_ms=%.2f transcription_ms=%.2f "
+        "transcription_model_load_ms=%.2f transcription_inference_ms=%.2f "
+        "preprocessing_ms=%.2f acoustic_analysis_ms=%.2f model_load_ms=%.2f "
+        "transformers_import_ms=%.2f feature_extractor_load_ms=%.2f "
+        "model_initialization_ms=%.2f "
+        "inference_ms=%.2f voice_analysis_total_ms=%.2f nlp_ms=%.2f "
+        "total_processing_ms=%.2f",
+        request_id, response.status_code,
+        metrics["audio_duration_seconds"], metrics["audio_size_bytes"], metrics["transcription_source"],
+        metrics["upload_read_ms"], metrics["decode_ms"], metrics["resample_ms"],
+        metrics["transcription_ms"], metrics["transcription_model_load_ms"],
+        metrics["transcription_inference_ms"], metrics["preprocessing_ms"],
+        metrics["acoustic_analysis_ms"], metrics["model_load_ms"],
+        metrics["transformers_import_ms"],
+        metrics["feature_extractor_load_ms"], metrics["model_initialization_ms"],
+        metrics["inference_ms"],
+        metrics["voice_analysis_total_ms"], metrics["nlp_ms"],
+        (time.perf_counter() - started) * 1000,
     )
     return response
 
 ENVIRONMENT = os.getenv("ENVIRONMENT", os.getenv("APP_ENV", "development")).strip().lower()
 INTERNAL_KEY = os.getenv("AI_SERVICE_INTERNAL_KEY", "").strip()
+
+
+def _env_enabled(name: str, default: str = "true") -> bool:
+    return os.getenv(name, default).strip().lower() in {"1", "true", "yes", "on"}
+
+
+if _env_enabled("VOICE_EMOTION_LOCAL_FILES_ONLY") and _env_enabled("WHISPER_LOCAL_FILES_ONLY"):
+    # Keep every Hugging Face loader offline when both model pipelines are
+    # configured for local cache use; missing assets then fail explicitly.
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
 nlp_service = NLPService()
 adaptive_engine = AdaptiveSocialCueEngine()
@@ -92,7 +157,10 @@ audio_analysis_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="
 
 def _timed_call(function, *args):
     started = time.perf_counter()
-    result = function(*args)
+    try:
+        result = function(*args)
+    except Exception as exc:
+        return exc, round((time.perf_counter() - started) * 1000, 2)
     return result, round((time.perf_counter() - started) * 1000, 2)
 
 
@@ -224,6 +292,10 @@ async def analyze_voice(
     read_started = time.perf_counter()
     audio_bytes = await audio.read(MAX_AUDIO_BYTES + 1)
     upload_read_ms = round((time.perf_counter() - read_started) * 1000, 2)
+    request.state.voice_metrics.update({
+        "audio_size_bytes": len(audio_bytes),
+        "upload_read_ms": upload_read_ms,
+    })
     if len(audio_bytes) > MAX_AUDIO_BYTES:
         raise _service_error(
             413,
@@ -244,7 +316,15 @@ async def analyze_voice(
             None, lambda: load_mono_audio(audio_bytes, filename, content_type, timings=audio_stage_timings)
         )
         decode_ms = audio_stage_timings.get("decode", round((time.perf_counter() - decode_started) * 1000, 2))
+        request.state.voice_metrics.update({
+            "audio_duration_seconds": round(samples.size / float(sample_rate), 3),
+            "decode_ms": decode_ms,
+            "resample_ms": audio_stage_timings.get("resample", 0.0),
+        })
     except AudioValidationError as exc:
+        request.state.voice_metrics["decode_ms"] = round(
+            (time.perf_counter() - decode_started) * 1000, 2
+        )
         code = "RESOURCE_EXHAUSTION" if exc.status_code == 413 else "AUDIO_DECODING_FAILURE"
         message = (
             "The audio recording exceeds the service size or duration limit."
@@ -254,17 +334,24 @@ async def analyze_voice(
         logger.warning("Audio decode rejected (%s, status=%d).", code, exc.status_code)
         raise _service_error(exc.status_code, code, message) from None
     except MemoryError:
+        request.state.voice_metrics["decode_ms"] = round(
+            (time.perf_counter() - decode_started) * 1000, 2
+        )
         logger.error("Audio decoding exhausted available memory.")
         raise _service_error(
             503, "RESOURCE_EXHAUSTION", "The audio service is temporarily out of resources."
         ) from None
     except Exception as exc:
+        request.state.voice_metrics["decode_ms"] = round(
+            (time.perf_counter() - decode_started) * 1000, 2
+        )
         logger.error("Audio decoding failed (%s).", type(exc).__name__)
         raise _service_error(
             422, "AUDIO_DECODING_FAILURE", "The audio recording could not be decoded."
         ) from None
 
     client_text = (transcript or "").strip()
+    request.state.voice_metrics["transcription_source"] = "browser" if client_text else "whisper"
     loop = asyncio.get_running_loop()
     parallel_started = time.perf_counter()
     if client_text:
@@ -292,26 +379,85 @@ async def analyze_voice(
         sample_rate,
     )
     try:
-        (transcription, transcription_ms), (voice_emotion, voice_analysis_ms) = await asyncio.wait_for(
+        (transcription_result, transcription_ms), (voice_result, voice_analysis_ms) = await asyncio.wait_for(
             asyncio.gather(transcription_future, voice_future),
             timeout=float(os.getenv("VOICE_ANALYSIS_TIMEOUT_SECONDS", "180")),
         )
     except asyncio.TimeoutError:
+        request.state.voice_metrics["voice_analysis_total_ms"] = round(
+            (time.perf_counter() - parallel_started) * 1000, 2
+        )
         logger.warning("Voice analysis request timed out.")
         raise _service_error(
             504, "REQUEST_TIMEOUT", "Voice analysis took too long. Please try a shorter recording."
         ) from None
     except MemoryError:
+        request.state.voice_metrics["voice_analysis_total_ms"] = round(
+            (time.perf_counter() - parallel_started) * 1000, 2
+        )
         logger.error("Voice analysis exhausted available memory.")
         raise _service_error(
             503, "RESOURCE_EXHAUSTION", "The audio service is temporarily out of resources."
         ) from None
     except Exception as exc:
+        request.state.voice_metrics["voice_analysis_total_ms"] = round(
+            (time.perf_counter() - parallel_started) * 1000, 2
+        )
         logger.error("Voice analysis failed (%s).", type(exc).__name__)
         raise _service_error(
             502, "VOICE_ANALYSIS_FAILURE", "Acoustic voice analysis could not be completed."
         ) from None
     parallel_analysis_wall_ms = round((time.perf_counter() - parallel_started) * 1000, 2)
+    if isinstance(transcription_result, MemoryError):
+        logger.error("Speech transcription exhausted available memory.")
+        raise _service_error(
+            503, "RESOURCE_EXHAUSTION", "The audio service is temporarily out of resources."
+        ) from None
+    if isinstance(transcription_result, Exception):
+        logger.error("Speech transcription failed (%s).", type(transcription_result).__name__)
+        transcription = {
+            "text": "",
+            "status": "failed",
+            "error": "transcription_failed",
+        }
+    else:
+        transcription = transcription_result
+
+    voice_analysis_failed = isinstance(voice_result, Exception)
+    if isinstance(voice_result, MemoryError):
+        logger.error("Voice analysis exhausted available memory; continuing with transcription only.")
+    elif voice_analysis_failed:
+        logger.error("Optional voice analysis failed (%s); continuing with transcription only.",
+                     type(voice_result).__name__)
+    if voice_analysis_failed:
+        voice_emotion = {
+            "status": "unavailable",
+            "label": None,
+            "score": None,
+            "scores": [],
+            "confidence": None,
+            "uncertainty": None,
+            "error": "voice_analysis_failed",
+            "acoustic_features": {},
+            "timings_ms": {"total": voice_analysis_ms},
+        }
+    else:
+        voice_emotion = voice_result
+    voice_timings = voice_emotion.get("timings_ms", {})
+    transcription_timings = transcription.get("timings_ms", {})
+    request.state.voice_metrics.update({
+        "transcription_ms": transcription_ms,
+        "transcription_model_load_ms": transcription_timings.get("model_load", 0.0),
+        "transcription_inference_ms": transcription_timings.get("inference", 0.0),
+        "preprocessing_ms": voice_timings.get("preprocessing", 0.0),
+        "acoustic_analysis_ms": voice_timings.get("acoustic_features", 0.0),
+        "model_load_ms": voice_timings.get("model_load", 0.0),
+        "transformers_import_ms": voice_timings.get("transformers_import", 0.0),
+        "feature_extractor_load_ms": voice_timings.get("feature_extractor_load", 0.0),
+        "model_initialization_ms": voice_timings.get("model_initialization", 0.0),
+        "inference_ms": voice_timings.get("inference", 0.0),
+        "voice_analysis_total_ms": voice_analysis_ms,
+    })
 
     transcript_text = (transcription.get("text") or "").strip()
     if not transcript_text:
@@ -342,6 +488,7 @@ async def analyze_voice(
         voice_emotion
     )
     nlp_ms = round((time.perf_counter() - nlp_started) * 1000, 2)
+    request.state.voice_metrics["nlp_ms"] = nlp_ms
 
     timings_ms = {
         "upload_read": upload_read_ms,
@@ -358,29 +505,6 @@ async def analyze_voice(
 
     acoustic_features = voice_emotion.get("acoustic_features") or {}
     emotion_available = voice_emotion.get("status") == "ok"
-    logger.info(
-        "voice_request_timing request_id=%s audio_duration_seconds=%.3f audio_size_bytes=%d "
-        "transcription_source=%s upload_read_ms=%.2f transcription_ms=%.2f "
-        "decode_ms=%.2f resample_ms=%.2f "
-        "transcription_model_load_ms=%.2f transcription_inference_ms=%.2f "
-        "preprocessing_ms=%.2f acoustic_analysis_ms=%.2f model_load_ms=%.2f "
-        "inference_ms=%.2f voice_analysis_total_ms=%.2f parallel_analysis_wall_ms=%.2f "
-        "nlp_ms=%.2f total_processing_ms=%.2f "
-        "model_cached=%s transcription_status=%s emotion_status=%s",
-        request_id, samples.size / float(sample_rate), len(audio_bytes),
-        "browser" if transcription.get("status") == "client" else "whisper",
-        upload_read_ms, transcription_ms, decode_ms, timings_ms["resample"],
-        transcription.get("timings_ms", {}).get("model_load", 0.0),
-        transcription.get("timings_ms", {}).get("inference", 0.0),
-        voice_emotion.get("timings_ms", {}).get("preprocessing", 0.0),
-        voice_emotion.get("timings_ms", {}).get("acoustic_features", 0.0),
-        voice_emotion.get("timings_ms", {}).get("model_load", 0.0),
-        voice_emotion.get("timings_ms", {}).get("inference", 0.0),
-        voice_analysis_ms, parallel_analysis_wall_ms, nlp_ms, timings_ms["total"],
-        voice_emotion.get("model_cached", "unknown"),
-        transcription.get("status", "unknown"), voice_emotion.get("status", "unknown"),
-    )
-
     return {
         "text": transcript_text,
         "transcription": transcription,
@@ -388,7 +512,11 @@ async def analyze_voice(
         "voice_emotion": voice_emotion,
         "acoustic_features": acoustic_features,
         "analysis_status": "complete" if emotion_available else "partial",
-        "analysis_warnings": [] if emotion_available else ["VOICE_EMOTION_UNAVAILABLE"],
+        "analysis_warnings": (
+            ["VOICE_ANALYSIS_FAILURE"] if voice_analysis_failed
+            else [] if emotion_available
+            else ["VOICE_EMOTION_UNAVAILABLE"]
+        ),
         "social_cues": social_cues,
         "input_mode": "voice",
         "timings_ms": timings_ms,

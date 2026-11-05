@@ -645,6 +645,17 @@
     background: #ffffff;
 }
 
+.chat-request-error {
+    width: min(900px, 100%);
+    margin: 0 auto 8px;
+    padding: 10px 14px;
+    border: 1px solid #f2c9c9;
+    border-radius: 10px;
+    background: #fff5f5;
+    color: #8f2929;
+    font-size: 0.9rem;
+}
+
 .composer {
     width: min(900px, 100%);
 

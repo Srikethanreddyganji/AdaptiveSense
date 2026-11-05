@@ -51,6 +51,29 @@ class AIAnalysisServiceTest {
     }
 
     @Test
+    void analyzePropagatesRequestIdToAiService() throws Exception {
+        AtomicReference<String> receivedRequestId = new AtomicReference<>();
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/analyze", exchange -> {
+            receivedRequestId.set(exchange.getRequestHeaders().getFirst("X-Request-ID"));
+            byte[] response = "{\"nlp\":{},\"social_cues\":{}}".getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, response.length);
+            exchange.getResponseBody().write(response);
+            exchange.close();
+        });
+        server.start();
+        try {
+            ReflectionTestUtils.setField(aiAnalysisService, "aiServiceUrl",
+                    "http://127.0.0.1:" + server.getAddress().getPort());
+            aiAnalysisService.analyze("hello", List.of(), Map.of(), "server-generated-id");
+            assertEquals("server-generated-id", receivedRequestId.get());
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
     void analyzeVoice_unreachable_failsWithoutInventingAnalysis() {
         ReflectionTestUtils.setField(aiAnalysisService, "environment", "development");
         ReflectionTestUtils.setField(aiAnalysisService, "aiServiceUrl", "http://localhost:9999");

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api from "../services/api";
+import { chatRequestErrorMessage } from "../services/chatErrors";
 import { clearSession } from "../utils/session";
 import "./Chat.css";
 
@@ -24,6 +25,7 @@ function Chat() {
     ]);
     const [message, setMessage] = useState("");
     const [loading, setLoading] = useState(false);
+    const [chatError, setChatError] = useState("");
     const [safetyNotice, setSafetyNotice] =
         useState(false);
 
@@ -38,6 +40,7 @@ function Chat() {
 
     const messagesContainerRef = useRef(null);
     const recognitionRef = useRef(null);
+    const sendingRef = useRef(false);
 
     /*
      * Speech recognition
@@ -196,9 +199,12 @@ function Chat() {
         const trimmedMessage =
             message.trim();
 
-        if (!trimmedMessage || loading) {
+        if (!trimmedMessage || loading || sendingRef.current) {
             return;
         }
+
+        sendingRef.current = true;
+        setChatError("");
 
         if (
             listening &&
@@ -240,9 +246,10 @@ function Chat() {
                 )
             );
 
-            const assistantText =
-                response.data?.response ||
-                "I'm here with you. Please try again.";
+            const assistantText = String(response.data?.response || "").trim();
+            if (!assistantText) {
+                throw new Error("The response service returned an empty response.");
+            }
 
             const assistantMessage = {
                 id: `assistant-${Date.now()}`,
@@ -262,21 +269,15 @@ function Chat() {
                 assistantMessage
             ]);
 
-        } catch {
-            const errorMessage = {
-                id: `error-${Date.now()}`,
-                role: "assistant",
-                text:
-                    "I'm having trouble connecting right now. Please try again in a moment.",
-                time: new Date()
-            };
-
-            setMessages((previous) => [
-                ...previous,
-                errorMessage
-            ]);
+        } catch (error) {
+            setMessages((previous) => previous.filter((item) => item.id !== userMessage.id));
+            setMessage((previous) => previous || trimmedMessage);
+            setChatError(error?.response || error?.request
+                ? chatRequestErrorMessage(error)
+                : "The response service returned no reply. Your message is ready to retry.");
 
         } finally {
+            sendingRef.current = false;
             setLoading(false);
         }
     };
@@ -300,6 +301,10 @@ function Chat() {
      * Start a new chat
      */
     const handleNewChat = () => {
+        if (sendingRef.current) {
+            return;
+        }
+
         setMessages([
             {
                 id:
@@ -316,6 +321,7 @@ function Chat() {
         ]);
 
         setMessage("");
+        setChatError("");
         setLoading(false);
     };
 
@@ -375,6 +381,7 @@ function Chat() {
                 <button
                     className="new-chat-button"
                     onClick={handleNewChat}
+                    disabled={loading}
                 >
 
                     <span className="new-chat-plus">
@@ -738,6 +745,12 @@ function Chat() {
                 ========================== */}
 
                 <div className="composer-area">
+
+                    {chatError && (
+                        <div className="chat-request-error" role="alert">
+                            {chatError}
+                        </div>
+                    )}
 
                     <div className="composer">
 

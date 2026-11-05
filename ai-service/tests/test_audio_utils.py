@@ -48,6 +48,20 @@ def test_validate_unsupported_format():
     assert "unsupported" in str(exc_info.value).lower()
 
 
+@pytest.mark.parametrize(
+    ("filename", "content_type"),
+    [
+        ("recording.exe", "audio/webm"),
+        ("recording.webm", "application/x-msdownload"),
+    ],
+)
+def test_validate_rejects_mismatched_or_unsafe_metadata(filename, content_type):
+    with pytest.raises(AudioValidationError) as exc_info:
+        validate_audio_upload(b"not decoded here", filename, content_type)
+    assert exc_info.value.status_code == 400
+    assert "unsupported" in str(exc_info.value).lower()
+
+
 def test_load_mono_audio_valid():
     wav_bytes = make_wav_bytes(duration_sec=1.0, sample_rate=16000, freq_hz=250.0)
     samples, sr = load_mono_audio(wav_bytes, "test.wav", "audio/wav")

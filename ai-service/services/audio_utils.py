@@ -82,7 +82,11 @@ def validate_audio_upload(
     )
     extension_ok = not extension or extension in ALLOWED_EXTENSIONS
 
-    if not type_ok and not extension_ok:
+    # Both supplied metadata fields must be acceptable. An OR here matters:
+    # accepting a valid MIME type with an executable extension (or vice versa)
+    # weakens upload validation even though the decoder later rejects many such
+    # files.
+    if not type_ok or not extension_ok:
         raise AudioValidationError(
             "Unsupported audio format. Use webm, wav, mp3, m4a, ogg, or flac."
         )

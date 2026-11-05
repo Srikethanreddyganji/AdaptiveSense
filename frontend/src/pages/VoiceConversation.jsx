@@ -19,6 +19,7 @@ function VoiceConversation() {
     // Voice analysis results
     const [acousticFeatures, setAcousticFeatures] = useState(null);
     const [voiceEmotion, setVoiceEmotion] = useState(null);
+    const [analysisWarnings, setAnalysisWarnings] = useState([]);
 
     // Activity state
     const [listening, setListening] = useState(false);
@@ -462,6 +463,9 @@ function VoiceConversation() {
         setTranscript("");
         setInterimTranscript("");
         setResponse("");
+        setAcousticFeatures(null);
+        setVoiceEmotion(null);
+        setAnalysisWarnings([]);
         clearAudioPreview();
         setAudioBlob(null);
 
@@ -567,6 +571,7 @@ function VoiceConversation() {
         setResponse("");
         setAcousticFeatures(null);
         setVoiceEmotion(null);
+        setAnalysisWarnings([]);
         setError("");
 
         try {
@@ -637,6 +642,7 @@ function VoiceConversation() {
                 setTranscript(payload.transcript || transcript);
                 setAcousticFeatures(payload.acousticFeatures || null);
                 setVoiceEmotion(payload.voiceEmotion || null);
+                setAnalysisWarnings(Array.isArray(payload.analysisWarnings) ? payload.analysisWarnings : []);
                 setProcessingTimings(payload.processingTimingsMs
                     ? { ...payload.processingTimingsMs, clientRequestToStreamHeadersMs: uploadMs }
                     : null);
@@ -730,6 +736,7 @@ function VoiceConversation() {
         setAudioBlob(null);
         setAcousticFeatures(null);
         setVoiceEmotion(null);
+        setAnalysisWarnings([]);
         setProcessingTimings(null);
         setRecordingDuration(0);
         setError("");
@@ -1025,7 +1032,12 @@ function VoiceConversation() {
                     )}
 
                     {/* Voice Emotion card */}
-                    {voiceEmotion?.status === "unavailable" && acousticFeatures && (
+                    {analysisWarnings.includes("VOICE_ANALYSIS_FAILURE") && (
+                        <p className="voice-analysis-note" role="status">
+                            Voice analysis could not be completed. Your transcript and AI response remain available; no acoustic or voice emotion result was produced.
+                        </p>
+                    )}
+                    {voiceEmotion?.status === "unavailable" && acousticFeatures && Object.keys(acousticFeatures).length > 0 && (
                         <p className="voice-analysis-note" role="status">
                             Acoustic features were calculated, but the voice emotion estimate is unavailable for this recording.
                         </p>
@@ -1129,7 +1141,7 @@ function VoiceConversation() {
                             {processingTimings && (
                                 <p className="processing-timing">
                                     Measured: total {(processingTimings.total / 1000).toFixed(1)}s ·
-                                    Gemini {(processingTimings.gemini / 1000).toFixed(1)}s ·
+                                    Local AI {(processingTimings.responseGeneration / 1000).toFixed(1)}s ·
                                     transcription {(processingTimings.aiPipeline?.transcription / 1000).toFixed(1)}s ·
                                     voice analysis {(processingTimings.aiPipeline?.voice_analysis / 1000).toFixed(1)}s ·
                                     model load {(processingTimings.aiPipeline?.voice_analysis_stages?.model_load / 1000).toFixed(1)}s ·

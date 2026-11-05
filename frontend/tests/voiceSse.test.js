@@ -25,10 +25,10 @@ test("valid complete event ends consumption without treating later stream closur
 test("server error event is surfaced as a categorized error", async () => {
     await assert.rejects(
         consumeVoiceSse(responseFrom([
-            'event: error\ndata: {"code":"GEMINI_UNAVAILABLE","message":"Try again later."}\n\n',
+            'event: error\ndata: {"code":"OLLAMA_UNAVAILABLE","message":"Try again later."}\n\n',
         ]), () => {}),
         (error) => error instanceof VoiceStreamError
-            && error.code === "GEMINI_UNAVAILABLE"
+            && error.code === "OLLAMA_UNAVAILABLE"
             && error.message === "Try again later.",
     );
 });

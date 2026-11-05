@@ -1,4 +1,5 @@
 import io
+import logging
 import subprocess
 import threading
 import wave
@@ -153,6 +154,38 @@ def test_voice_request_summary_logs_correlation_for_validation_failure(caplog):
     )
 
 
+def test_voice_request_summary_logs_safe_success_stage_timings(caplog):
+    caplog.set_level(logging.INFO, logger="main")
+    private_test_text = "private timing phrase must not appear in logs"
+    response = client.post(
+        "/analyze-voice",
+        files={"audio": ("sample.wav", make_test_wav(), "audio/wav")},
+        data={"transcript": private_test_text},
+        headers={"X-Request-ID": "timing-success-456"},
+    )
+
+    assert response.status_code == 200
+    summary = next(
+        record.message for record in caplog.records
+        if "voice_request_summary request_id=timing-success-456" in record.message
+    )
+    for field in (
+        "audio_duration_seconds=1.0",
+        "audio_size_bytes=",
+        "transcription_source=browser",
+        "upload_read_ms=",
+        "decode_ms=",
+        "resample_ms=",
+        "transcription_ms=0.00",
+        "acoustic_analysis_ms=",
+        "model_load_ms=",
+        "inference_ms=",
+        "total_processing_ms=",
+    ):
+        assert field in summary
+    assert private_test_text not in summary
+
+
 def test_analyze_voice_unsupported_format():
     response = client.post(
         "/analyze-voice",
@@ -176,15 +209,21 @@ def test_analyze_voice_reports_transcription_model_load_failure(monkeypatch):
     assert response.json()["detail"]["code"] == "MODEL_LOADING_FAILURE"
 
 
-def test_analyze_voice_reports_voice_analysis_failure(monkeypatch):
+def test_voice_analysis_exception_does_not_discard_valid_transcript(monkeypatch):
     monkeypatch.setattr(main.voice_service, "analyze", lambda *_: (_ for _ in ()).throw(RuntimeError("private detail")))
     response = client.post(
         "/analyze-voice",
         files={"audio": ("sample.wav", make_test_wav(), "audio/wav")},
         data={"transcript": "A harmless test transcript."},
     )
-    assert response.status_code == 502
-    assert response.json()["detail"]["code"] == "VOICE_ANALYSIS_FAILURE"
+    assert response.status_code == 200
+    result = response.json()
+    assert result["text"] == "A harmless test transcript."
+    assert result["analysis_status"] == "partial"
+    assert result["analysis_warnings"] == ["VOICE_ANALYSIS_FAILURE"]
+    assert result["voice_emotion"]["status"] == "unavailable"
+    assert result["voice_emotion"]["label"] is None
+    assert result["acoustic_features"] == {}
     assert "private detail" not in response.text
 
 

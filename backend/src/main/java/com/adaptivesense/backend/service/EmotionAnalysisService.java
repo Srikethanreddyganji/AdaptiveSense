@@ -52,7 +52,7 @@ public class EmotionAnalysisService {
      * Adaptive Social Cue Engine
      *
      * This method DOES NOT call Python again.
-     * This method DOES NOT call Gemini.
+     * Response generation is handled separately by the configured local model.
      *
      * It simply converts the Python result into our
      * EmotionAnalysis database entity and saves it.

@@ -5,6 +5,7 @@ import time
 
 import numpy as np
 import torch
+from services.runtime_config import configure_torch_threads
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,11 @@ class VoiceService:
         self._id2label = {}
         self._load_attempted = False
         self._load_error = None
+        self._model_load_timings_ms = {
+            "transformers_import": 0.0,
+            "feature_extractor_load": 0.0,
+            "model_initialization": 0.0,
+        }
         self.enabled = os.getenv(
             "VOICE_EMOTION_ENABLED",
             "true"
@@ -43,7 +49,7 @@ class VoiceService:
             "superb/wav2vec2-base-superb-er"
         )
         self.local_files_only = os.getenv(
-            "VOICE_EMOTION_LOCAL_FILES_ONLY", "false"
+            "VOICE_EMOTION_LOCAL_FILES_ONLY", "true"
         ).strip().lower() in {"1", "true", "yes", "on"}
         self.expected_sample_rate = 16000
 
@@ -72,34 +78,69 @@ class VoiceService:
             self._load_complete.wait()
             return
 
+        import_started = time.perf_counter()
         try:
+            cache_root = os.getenv("HF_HUB_CACHE") or os.getenv("TRANSFORMERS_CACHE") or os.path.join(
+                os.getenv("HF_HOME", os.path.expanduser("~/.cache/huggingface")), "hub"
+            )
+            logger.info(
+                "Loading voice emotion model model=%s local_files_only=%s "
+                "hf_hub_offline=%s transformers_offline=%s cache_location=%s.",
+                self.model_id,
+                self.local_files_only,
+                os.getenv("HF_HUB_OFFLINE", "0").lower() in {"1", "true", "yes", "on"},
+                os.getenv("TRANSFORMERS_OFFLINE", "0").lower() in {"1", "true", "yes", "on"},
+                cache_root,
+            )
             from transformers import (
                 Wav2Vec2FeatureExtractor,
                 Wav2Vec2ForSequenceClassification,
             )
+            transformers_import_ms = round((time.perf_counter() - import_started) * 1000, 2)
 
-            torch.set_num_threads(1)
+            configure_torch_threads(torch)
+            extractor_started = time.perf_counter()
             self._feature_extractor = Wav2Vec2FeatureExtractor.from_pretrained(
                 self.model_id,
                 local_files_only=self.local_files_only,
             )
+            feature_extractor_load_ms = round((time.perf_counter() - extractor_started) * 1000, 2)
+            model_started = time.perf_counter()
             self._model = Wav2Vec2ForSequenceClassification.from_pretrained(
                 self.model_id,
                 low_cpu_mem_usage=True,
                 local_files_only=self.local_files_only,
             )
+            model_initialization_ms = round((time.perf_counter() - model_started) * 1000, 2)
             self._model.eval()
             self._id2label = {
                 int(key): value
                 for key, value in self._model.config.id2label.items()
             }
+            self._model_load_timings_ms = {
+                "transformers_import": transformers_import_ms,
+                "feature_extractor_load": feature_extractor_load_ms,
+                "model_initialization": model_initialization_ms,
+            }
             self._load_error = None
             logger.info("Wav2vec2 voice emotion model loaded successfully (model=%s).", self.model_id)
         except Exception as exc:
+            self._model_load_timings_ms = {
+                "transformers_import": round((time.perf_counter() - import_started) * 1000, 2),
+                "feature_extractor_load": 0.0,
+                "model_initialization": 0.0,
+            }
             self._model = None
             self._feature_extractor = None
-            self._load_error = "voice_emotion_model_unavailable"
-            logger.error("Wav2vec2 model load failed (model=%s, error=%s).", self.model_id, type(exc).__name__)
+            self._load_error = (
+                "voice_emotion_model_not_cached"
+                if self.local_files_only and isinstance(exc, OSError)
+                else "voice_emotion_model_unavailable"
+            )
+            logger.error(
+                "Wav2vec2 model load failed (model=%s, local_files_only=%s, category=%s, error=%s).",
+                self.model_id, self.local_files_only, self._load_error, type(exc).__name__,
+            )
         finally:
             self._load_complete.set()
 
@@ -225,7 +266,14 @@ class VoiceService:
 
     def analyze_emotion(self, samples: np.ndarray, sample_rate: int) -> dict:
         analysis_started = time.perf_counter()
-        timings = {"model_load": 0.0, "preprocessing": 0.0, "inference": 0.0}
+        timings = {
+            "model_load": 0.0,
+            "transformers_import": 0.0,
+            "feature_extractor_load": 0.0,
+            "model_initialization": 0.0,
+            "preprocessing": 0.0,
+            "inference": 0.0,
+        }
         if not self.enabled:
             result = self._unavailable_result("disabled", {})
             timings["total"] = round((time.perf_counter() - analysis_started) * 1000, 2)
@@ -242,6 +290,8 @@ class VoiceService:
         model_load_started = time.perf_counter()
         self._load_model()
         timings["model_load"] = round((time.perf_counter() - model_load_started) * 1000, 2)
+        if not model_cached:
+            timings.update(self._model_load_timings_ms)
         if self._model is None or self._feature_extractor is None:
             result = self._unavailable_result(
                 self._load_error or "voice_emotion_model_unavailable", {}
@@ -270,10 +320,11 @@ class VoiceService:
 
         probability_total = None
         weight_total = 0.0
+        inference_batch_size = 2
         try:
             with self._inference_lock:
-                for start in range(0, len(segments), 2):
-                    batch = segments[start:start + 2]
+                for start in range(0, len(segments), inference_batch_size):
+                    batch = segments[start:start + inference_batch_size]
                     preprocessing_started = time.perf_counter()
                     inputs = self._feature_extractor(
                         batch,
@@ -323,10 +374,17 @@ class VoiceService:
             )
             timings["total"] = round((time.perf_counter() - analysis_started) * 1000, 2)
             logger.info(
-                "Voice emotion stages: model_load_ms=%.2f preprocessing_ms=%.2f "
-                "inference_ms=%.2f total_ms=%.2f model_cached=%s segments=%d model=%s.",
-                timings["model_load"], timings["preprocessing"], timings["inference"],
-                timings["total"], model_cached, len(segments), self.model_id,
+                "Voice emotion stages: model_load_ms=%.2f transformers_import_ms=%.2f "
+                "feature_extractor_load_ms=%.2f "
+                "model_initialization_ms=%.2f preprocessing_ms=%.2f "
+                "inference_ms=%.2f total_ms=%.2f model_cached=%s segments=%d "
+                "batch_size=%d device=cpu torch_threads=%d model=%s.",
+                # CPU inference is deliberately single-threaded and serialized by
+                # _inference_lock to bound memory use under concurrent requests.
+                timings["model_load"], timings["transformers_import"], timings["feature_extractor_load"],
+                timings["model_initialization"], timings["preprocessing"], timings["inference"],
+                timings["total"], model_cached, len(segments), inference_batch_size,
+                torch.get_num_threads(), self.model_id,
             )
             return {
                 "status": "ok",
